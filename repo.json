@@ -8,10 +8,10 @@
     "Punchline": "Winamp-inspired Penumbra playlist switching for syncshell DJing.",
     "Description": "Plan and perform Penumbra music-option playlists with Winamp-style controls - skinnable .wsz UI, playlist, window-shade modes and spectrum analyzer. Use /xivamp to open the player.",
     "ApplicableVersion": "any",
-    "RepoUrl": "https://github.com/aecid/xivAMP",
-    "DalamudApiLevel": 12,
+    "RepoUrl": "https://github.com/CarpeNukem/xivamp",
+    "DalamudApiLevel": 15,
     "LoadPriority": 0,
-    "IconUrl": "https://raw.githubusercontent.com/aecid/xivAMP/main/xivAMP/images/icon.png",
+    "IconUrl": "https://raw.githubusercontent.com/CarpeNukem/xivamp/main/xivAMP/xivamp.png",
     "Tags": [
       "penumbra",
       "music",
@@ -23,8 +23,8 @@
       "utility"
     ],
     "DownloadCount": 0,
-    "DownloadLinkInstall": "https://github.com/aecid/xivAMP/releases/latest/download/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/aecid/xivAMP/releases/latest/download/latest.zip",
-    "DownloadLinkTesting": "https://github.com/aecid/xivAMP/releases/latest/download/latest.zip"
+    "DownloadLinkInstall": "https://github.com/CarpeNukem/xivamp/releases/latest/download/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/CarpeNukem/xivamp/releases/latest/download/latest.zip",
+    "DownloadLinkTesting": "https://github.com/CarpeNukem/xivamp/releases/latest/download/latest.zip"
   }
 ]

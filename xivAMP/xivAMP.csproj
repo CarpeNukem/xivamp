@@ -4,7 +4,7 @@
     <Authors>aecid</Authors>
     <Company></Company>
     <Description>Winamp-inspired Penumbra option playlist controller for syncshell DJing.</Description>
-    <PackageProjectUrl>https://github.com/aecid/xivAMP</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/CarpeNukem/xivamp</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
