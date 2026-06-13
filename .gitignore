@@ -1,0 +1,43 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+
+# Dalamud packager output
+**/latest.zip
+**/*.deps.json
+
+# IDE and editor state
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# .NET and NuGet local state
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.assets.json
+*.nuget.g.props
+*.nuget.g.targets
+*.nuget.dgspec.json
+
+# Logs, diagnostics, and caches
+*.log
+*.binlog
+*.cache
+*.tmp
+*.temp
+TestResults/
+coverage/
+coverage.*
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,30 @@
+[
+  {
+    "Author": "aecid",
+    "Name": "xivAMP",
+    "InternalName": "xivAMP",
+    "AssemblyVersion": "0.1.0.0",
+    "TestingAssemblyVersion": "0.1.0.0",
+    "Punchline": "Winamp-inspired Penumbra playlist switching for syncshell DJing.",
+    "Description": "Plan and perform Penumbra music-option playlists with Winamp-style controls - skinnable .wsz UI, playlist, window-shade modes and spectrum analyzer. Use /xivamp to open the player.",
+    "ApplicableVersion": "any",
+    "RepoUrl": "https://github.com/aecid/xivAMP",
+    "DalamudApiLevel": 12,
+    "LoadPriority": 0,
+    "IconUrl": "https://raw.githubusercontent.com/aecid/xivAMP/main/xivAMP/images/icon.png",
+    "Tags": [
+      "penumbra",
+      "music",
+      "playlist",
+      "syncshell",
+      "winamp"
+    ],
+    "CategoryTags": [
+      "utility"
+    ],
+    "DownloadCount": 0,
+    "DownloadLinkInstall": "https://github.com/aecid/xivAMP/releases/latest/download/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/aecid/xivAMP/releases/latest/download/latest.zip",
+    "DownloadLinkTesting": "https://github.com/aecid/xivAMP/releases/latest/download/latest.zip"
+  }
+]
