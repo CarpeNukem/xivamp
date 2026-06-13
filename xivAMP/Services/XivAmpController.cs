@@ -262,35 +262,15 @@ public sealed class XivAmpController
 
     public void StopCurrent()
     {
-        // Stop = jump to the group's first option, select it, and play it (with redraw).
-        var playlist = this.plugin.Configuration.Playlist;
-        if (playlist.Count == 0)
-        {
-            this.Status = "Playlist is empty.";
-            return;
-        }
+        // Stop = switch to the group's default/"off" option (applied directly through
+        // Penumbra), or clear xivAMP's temporary settings if the group has no off option.
+        // This silences the music whether or not an "off" entry exists in the playlist.
+        // The current selection is kept, so Play resumes the same track.
+        this.ApplyDefaultOption(preserveCurrentIndex: true, paused: false, status: "Stopped.");
 
-        var currentEntry = this.CurrentEntry();
-        var optionGroup = !string.IsNullOrWhiteSpace(currentEntry?.OptionGroup)
-            ? currentEntry.OptionGroup
-            : this.plugin.Configuration.SelectedOptionGroup;
-        var defaultOption = this.DefaultOptionForGroup(optionGroup);
-
-        var index = string.IsNullOrWhiteSpace(defaultOption)
-            ? 0
-            : playlist.FindIndex(entry => this.IsEntryIdentity(entry, optionGroup, defaultOption));
-        if (index < 0)
-            index = 0;
-
-        this.plugin.Configuration.CurrentIndex = index;
-        this.plugin.Save();
-        this.ApplyCurrent();
-
-        // Mark as stopped: the "off" option silences the mod, but the UI should show a
-        // stopped state (no running clock / visualizer) and must not auto-advance.
+        // Show a stopped state (no running clock / visualizer) and don't auto-advance.
         this.plugin.Configuration.IsStopped = true;
         this.plugin.Save();
-        this.Status = "Stopped.";
     }
 
     public void MovePlaylistEntry(int sourceIndex, int targetIndex)
