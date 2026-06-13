@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <None Include="Skins\*.wsz" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="xivamp.png" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="Skins\base-2.91.wsz" LogicalName="xivAMP.Skins.base-2.91.wsz" />
   </ItemGroup>
 </Project>

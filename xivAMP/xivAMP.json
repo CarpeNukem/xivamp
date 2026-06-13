@@ -5,6 +5,8 @@
   "Punchline": "Winamp-inspired Penumbra playlist switching for syncshell DJing.",
   "Description": "Plan and perform Penumbra music-option playlists with Winamp-style controls. Use /xivamp to open the player.",
   "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/CarpeNukem/xivamp",
+  "IconUrl": "https://raw.githubusercontent.com/CarpeNukem/xivamp/main/xivAMP/xivamp.png",
   "Tags": [
     "penumbra",
     "music",
