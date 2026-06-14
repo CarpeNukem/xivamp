@@ -915,9 +915,21 @@ public sealed class PlaylistWindow : Window
             if (exists)
                 this.checkedAddOptions.Remove(option);
 
+            var rowStart = ImGui.GetCursorScreenPos();
+            if (ImGui.IsMouseHoveringRect(rowStart, rowStart + new Vector2(childWidth, rowHeight)))
+            {
+                var hoverColor = exists
+                    ? this.plugin.CurrentSkin.GenColors.ItemBackground
+                    : this.plugin.CurrentSkin.GenColors.Selection;
+                ImGui.GetWindowDrawList().AddRectFilled(
+                    rowStart,
+                    rowStart + new Vector2(childWidth, rowHeight),
+                    ImGui.GetColorU32(hoverColor));
+            }
+
+            ImGui.SetCursorScreenPos(rowStart + new Vector2(2, MathF.Max(0, (rowHeight - 14) * 0.5f)));
             if (exists)
                 ImGui.BeginDisabled();
-
             if (SkinnedPanel.ToggleButton(this.plugin.CurrentSkin, "##check", "+", selected, new Vector2(14, 14)))
             {
                 if (selected)
@@ -925,17 +937,30 @@ public sealed class PlaylistWindow : Window
                 else
                     this.checkedAddOptions.Add(option);
             }
+            if (exists)
+                ImGui.EndDisabled();
 
-            ImGui.SameLine();
-            if (ImGui.Selectable(exists ? $"{option} (added)" : option, false))
+            var label = exists ? $"{option} (added)" : option;
+            var labelX = 22.0f;
+            var labelPos = rowStart + new Vector2(labelX, MathF.Max(0, (rowHeight - ImGui.GetTextLineHeight()) * 0.5f));
+            var labelSize = new Vector2(MathF.Max(1, childWidth - labelX), rowHeight);
+            ImGui.SetCursorScreenPos(rowStart + new Vector2(labelX, 0));
+            ImGui.InvisibleButton("##option", labelSize);
+            if (!exists && ImGui.IsItemClicked())
             {
                 this.controller.AddPlaylistEntry(this.addGroup, option);
                 this.checkedAddOptions.Remove(option);
             }
 
+            var textColor = exists
+                ? this.plugin.CurrentSkin.GenColors.Divider
+                : this.plugin.CurrentSkin.GenColors.ItemForeground;
+            ImGui.PushClipRect(rowStart, rowStart + new Vector2(childWidth, rowHeight), true);
+            ImGui.GetWindowDrawList().AddText(labelPos, ImGui.GetColorU32(textColor), label);
+            ImGui.PopClipRect();
+
+            ImGui.SetCursorScreenPos(rowStart + new Vector2(0, rowHeight));
             ImGui.PopID();
-            if (exists)
-                ImGui.EndDisabled();
         }
 
         ImGui.EndChild();
