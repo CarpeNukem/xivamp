@@ -39,6 +39,9 @@ public sealed class PlayerWindow : Window
 
     public Vector2 CurrentSize => this.plugin.Configuration.MainWindowShade ? ShadeSize : BaseSize;
 
+    internal void Dispose()
+        => this.setupPopup.Dispose();
+
     public override void OnClose()
     {
         // Closing the player UI fully releases control over the music mod:
@@ -133,7 +136,7 @@ public sealed class PlayerWindow : Window
                 this.plugin.CurrentSkin,
                 "xivamp_setup",
                 new Vector2(this.plugin.Configuration.SetupPopupWidth, this.plugin.Configuration.SetupPopupHeight),
-                new Vector2(405, 305),
+                new Vector2(405, 450),
                 true,
                 size =>
                 {
@@ -147,8 +150,6 @@ public sealed class PlayerWindow : Window
         }
     }
 
-    private const string DiscordUrl = "https://discord.gg/kxZMbP3C5B";
-
     private void DrawLogoLink(Vector2 origin, float scale)
     {
         // The Winamp lightning logo (bottom-right of the main window) links to Discord.
@@ -156,7 +157,7 @@ public sealed class PlayerWindow : Window
         var size = new Vector2(20, 18) * scale;
         ImGui.SetCursorScreenPos(pos);
         if (ImGui.InvisibleButton("##xivamp_discord", size))
-            Dalamud.Utility.Util.OpenLink(DiscordUrl);
+            Dalamud.Utility.Util.OpenLink(Plugin.DiscordUrl);
 
         if (ImGui.IsItemHovered())
         {

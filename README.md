@@ -124,7 +124,7 @@ Both standard and RLE-compressed BMPs are supported, as are PNG versions of the 
 
 - `/xivamp` or `/xamp` - toggle the player (and playlist).
 - Title bar: options menu, **shade** (minimize), close.
-- The Winamp logo on the main window links to the //n_root discord community that authored the mod **[Discord](https://discord.gg/kxZMbP3C5C)**.
+- The Winamp logo on the main window links to the //n_root discord community that authored the mod **[Discord](https://discord.gg/kxZMbP3C5B)**.
 
 ---
 

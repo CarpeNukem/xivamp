@@ -24,6 +24,10 @@
   <ItemGroup>
     <None Include="Skins\*.wsz" CopyToOutputDirectory="PreserveNewest" />
     <None Include="xivamp.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="discord.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="n_root.png" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="discord.png" LogicalName="xivAMP.discord.png" />
+    <EmbeddedResource Include="n_root.png" LogicalName="xivAMP.n_root.png" />
     <EmbeddedResource Include="Skins\base-2.91.wsz" LogicalName="xivAMP.Skins.base-2.91.wsz" />
   </ItemGroup>
 </Project>

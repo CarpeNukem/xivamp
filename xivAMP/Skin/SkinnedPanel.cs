@@ -17,9 +17,15 @@ public static class SkinnedPanel
     private const float ContentPaddingBottom = 10;
     private const float ResizeStepX = 25;
     private const float ResizeStepY = 29;
+    private const float GripSize = 14;
     private const float DefaultRowGap = 5;
     private const float DefaultSectionGap = 7;
     private static string resizingPopupId = string.Empty;
+
+    // Last-frame geometry per resizable popup, so we can decide (before ImGui.Begin)
+    // whether a mouse-down lands on the resize grip and must suppress window-move.
+    private static readonly Dictionary<string, Vector2> popupPositions = new();
+    private static readonly Dictionary<string, Vector2> popupSizes = new();
 
     public static bool BeginPopup(WinampSkin skin, string id)
         => BeginPopup(skin, id, null, null, false, null);
@@ -37,13 +43,25 @@ public static class SkinnedPanel
         var size = desiredSize ?? new Vector2(285, 110);
         ImGui.SetNextWindowSize(new Vector2(MathF.Max(minimum.X, size.X), MathF.Max(minimum.Y, size.Y)), ImGuiCond.Always);
 
-        if (ImGui.BeginPopup(id, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+        var flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+
+        // Popups have no title bar, so ImGui moves them when you drag anywhere in the body -
+        // including the bottom-right resize grip. Detect a mouse-down on the grip (using last
+        // frame's geometry) and add NoMove for this frame so the manual resize wins instead.
+        if (resizable && StartingResize(id))
+            flags |= ImGuiWindowFlags.NoMove;
+
+        if (ImGui.BeginPopup(id, flags))
         {
             DrawChrome(skin);
             DrawCloseButton(skin, id);
 
             if (resizable)
+            {
                 HandleResize(id, minimum, onResize);
+                popupPositions[id] = ImGui.GetWindowPos();
+                popupSizes[id] = ImGui.GetWindowSize();
+            }
 
             ImGui.SetCursorPos(ContentCursorPosition());
 
@@ -468,11 +486,28 @@ public static class SkinnedPanel
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
     }
 
+    // True when the user has just pressed (or is holding) the left button over the resize
+    // grip, judged from last frame's geometry - used to set NoMove before ImGui.Begin.
+    private static bool StartingResize(string id)
+    {
+        if (string.Equals(resizingPopupId, id, StringComparison.Ordinal))
+            return true;
+
+        if (!popupPositions.TryGetValue(id, out var pos) || !popupSizes.TryGetValue(id, out var size))
+            return false;
+
+        var gripSize = new Vector2(GripSize, GripSize);
+        var gripPos = pos + size - gripSize;
+        var mouse = ImGui.GetIO().MousePos;
+        return IsInRect(mouse, gripPos, gripPos + gripSize)
+            && ImGui.IsMouseClicked(ImGuiMouseButton.Left);
+    }
+
     private static void HandleResize(string id, Vector2 minSize, Action<Vector2>? onResize)
     {
         var pos = ImGui.GetWindowPos();
         var size = ImGui.GetWindowSize();
-        var gripSize = new Vector2(14, 14);
+        var gripSize = new Vector2(GripSize, GripSize);
         var gripPos = pos + size - gripSize;
         var mouse = ImGui.GetIO().MousePos;
         var hovered = IsInRect(mouse, gripPos, gripPos + gripSize);

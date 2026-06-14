@@ -14,6 +14,10 @@ public sealed class XivAmpController
     private IReadOnlyDictionary<string, string[]> groups = new Dictionary<string, string[]>();
     private bool dataLoaded;
 
+    // True while the mod's "on play" emote has already been fired for the current playback
+    // session, so auto-advancing between tracks doesn't restart it. Reset on stop/pause/etc.
+    private bool emoteActive;
+
     public XivAmpController(Plugin plugin, IPluginLog log, IObjectTable objectTable)
     {
         this.plugin = plugin;
@@ -240,11 +244,49 @@ public sealed class XivAmpController
             this.plugin.Configuration.IsPaused = false;
             this.plugin.Configuration.IsStopped = false;
             this.plugin.Save();
+            this.MaybeFireModEmote();
             this.Status = $"Applied {entry.Label}";
             return;
         }
 
         this.Status = result.Error;
+    }
+
+    /// <summary>
+    /// Fire the selected mod's "on play" emote once per playback session. Skipped if one is
+    /// already considered active (so auto-advancing tracks doesn't restart the emote).
+    /// </summary>
+    private void MaybeFireModEmote()
+    {
+        if (this.emoteActive)
+            return;
+
+        var modDir = this.plugin.Configuration.SelectedModDirectory;
+        if (string.IsNullOrWhiteSpace(modDir)
+            || !this.plugin.Configuration.ModEmoteSets.TryGetValue(modDir, out var emotes)
+            || emotes is null
+            || emotes.Count == 0)
+            return;
+
+        // Don't restart if one of this mod's selected emotes is already playing (matched by
+        // the live emote id, so idle/sit/doze don't count). Treat it as satisfied this session.
+        var player = this.objectTable.LocalPlayer;
+        if (player is not null
+            && emotes.Any(emote => this.plugin.Emotes.IsPerformingEmote(player.Address, (ushort)emote.EmoteId)))
+        {
+            this.emoteActive = true;
+            return;
+        }
+
+        // A mod can have several selected emotes; pick one at random for this session.
+        var trigger = emotes[this.random.Next(emotes.Count)];
+        if (trigger.EmoteId == 0)
+            return;
+
+        if (this.plugin.Emotes.TryExecute((ushort)trigger.EmoteId, out var error))
+            this.emoteActive = true;
+        else
+            this.log.Warning("Did not play emote {Name}: {Error}", trigger.Name, error);
     }
 
     public void PauseCurrent()
@@ -625,6 +667,9 @@ public sealed class XivAmpController
 
     private void ResetActiveTrack(string successStatus, bool clearTemporaryAfterDefault)
     {
+        // Releasing/clearing playback - the emote may fire again on the next play.
+        this.emoteActive = false;
+
         var previousMod = this.plugin.Configuration.SelectedModDirectory;
         var previousGroup = !string.IsNullOrWhiteSpace(this.plugin.Configuration.LastAppliedOptionGroup)
             ? this.plugin.Configuration.LastAppliedOptionGroup
@@ -679,6 +724,9 @@ public sealed class XivAmpController
 
     private void ApplyDefaultOption(bool preserveCurrentIndex, bool paused, string status)
     {
+        // Playback is stopping/pausing - allow the emote to fire again on the next play.
+        this.emoteActive = false;
+
         var currentEntry = this.CurrentEntry();
         var optionGroup = !string.IsNullOrWhiteSpace(currentEntry?.OptionGroup)
             ? currentEntry.OptionGroup

@@ -1,13 +1,18 @@
 using System.Numerics;
+using System.Reflection;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
+using Dalamud.Interface.Textures;
+using Dalamud.Interface.Textures.TextureWraps;
+using StbImageSharp;
 using xivAMP.Services;
 using xivAMP.Skin;
 
 namespace xivAMP.Windows;
 
-public sealed class SetupPopup
+public sealed class SetupPopup : IDisposable
 {
+    private const string SkinMuseumUrl = "https://skins.webamp.org/";
     private const float ButtonHeight = 15;
     private const float RowGap = 5;
     private const float SetupColumnTargetWidth = 310;
@@ -16,11 +21,17 @@ public sealed class SetupPopup
     private readonly Plugin plugin;
     private readonly XivAmpController controller;
     private readonly FileDialogManager fileDialogManager;
+    private ContactLogo? discordLogo;
+    private ContactLogo? nRootLogo;
+    private bool contactLogosLoaded;
     private string modFilter = string.Empty;
     private string selectedPresetName = string.Empty;
     private string presetNameBuffer = string.Empty;
     private string renamePresetBuffer = string.Empty;
     private string pendingPresetName = string.Empty;
+    private string changedItemsModDir = string.Empty;
+    private IReadOnlyList<ChangedItem> changedItems = Array.Empty<ChangedItem>();
+    private string changedItemsError = string.Empty;
 
     public SetupPopup(Plugin plugin, XivAmpController controller, FileDialogManager fileDialogManager)
     {
@@ -47,7 +58,7 @@ public sealed class SetupPopup
             this.plugin.LoadConfiguredSkin();
         }
 
-        // Scale is locked at 1.0 for now; the skin-museum link takes its place.
+        // Scale is locked at 1.0 for now... Maybe will make x2 option later
         if (this.plugin.Configuration.SkinScale != 1.0f)
         {
             this.plugin.Configuration.SkinScale = 1.0f;
@@ -55,7 +66,11 @@ public sealed class SetupPopup
         }
 
         SkinnedPanel.SameRow(RowGap);
-        LinkText("Browse skins", "https://skins.webamp.org/");
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##browse_skins", "BROWSE SKINS", new Vector2(104, ButtonHeight)))
+            Dalamud.Utility.Util.OpenLink(SkinMuseumUrl);
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(SkinMuseumUrl);
 
         this.BeginSetupColumn();
         this.Section("options", columnWidth);
@@ -76,13 +91,13 @@ public sealed class SetupPopup
             ImGui.SetTooltip("Redraw character after applying a track.\nRequired for visual changes to appear.");
 
         // Extra time a track is held past its end before auto-advancing, so the next
-        // track's Penumbra/Mare sync lands without cutting this one short.
+        // track's Penumbra/Mare (or analog lol... no Mare except original Mare!.. I miss it :c..) sync lands without cutting this one short.
         this.BeginSetupColumn();
         var gap = (float)this.plugin.Configuration.TrackGapSeconds;
         ImGui.SetNextItemWidth(120);
-        if (ImGui.SliderFloat("##trackgap", ref gap, 0f, 15f, "%.1fs"))
+        if (ImGui.SliderFloat("##trackgap", ref gap, 0f, 10f, "%.1fs"))
         {
-            this.plugin.Configuration.TrackGapSeconds = Math.Clamp(gap, 0f, 15f);
+            this.plugin.Configuration.TrackGapSeconds = Math.Clamp(gap, 0f, 10f);
             this.plugin.Save();
         }
 
@@ -90,12 +105,20 @@ public sealed class SetupPopup
             ImGui.SetTooltip("Extra time to hold a track past its end before auto-advancing,\nso the next track has time to sync before it plays.");
 
         SkinnedPanel.SameRow(RowGap);
-        ImGui.TextDisabled("track gap");
+        ImGui.TextDisabled("Pause between tracks for sync");
 
         this.DrawPresetControls(columnWidth);
         this.BeginSetupColumn();
         this.Section("mod", columnWidth);
         this.DrawModCombo(columnWidth);
+        this.DrawChangedItems(columnWidth);
+        this.DrawContacts(columnWidth);
+    }
+
+    public void Dispose()
+    {
+        this.discordLogo?.Dispose();
+        this.nRootLogo?.Dispose();
     }
 
     private float BeginSetupColumn()
@@ -345,6 +368,203 @@ public sealed class SetupPopup
         ImGui.EndCombo();
     }
 
+    private void DrawChangedItems(float columnWidth)
+    {
+        // Refresh the cached list only when the selected mod changes (the IPC call is not
+        // free, so we don't run it every frame).
+        var modDir = this.plugin.Configuration.SelectedModDirectory;
+        if (!string.Equals(modDir, this.changedItemsModDir, StringComparison.Ordinal))
+        {
+            this.changedItemsModDir = modDir;
+            var result = this.plugin.Penumbra.GetChangedItemsList(modDir);
+            this.changedItems = result.Success && result.Value is not null ? result.Value : Array.Empty<ChangedItem>();
+            this.changedItemsError = result.Success ? string.Empty : result.Error;
+        }
+
+        if (string.IsNullOrWhiteSpace(modDir))
+            return;
+
+        this.Section("Select emote to play", columnWidth);
+        this.BeginSetupColumn();
+
+        if (!string.IsNullOrWhiteSpace(this.changedItemsError))
+        {
+            ImGui.TextDisabled(this.changedItemsError);
+            return;
+        }
+
+        if (this.changedItems.Count == 0)
+        {
+            ImGui.TextDisabled("Penumbra reports no changed items for this mod.");
+            return;
+        }
+
+        var modDirKey = this.plugin.Configuration.SelectedModDirectory;
+        var emoteItems = this.changedItems.Where(item => item.IsEmote).ToList();
+
+        this.BeginSetupColumn();
+        if (emoteItems.Count == 0)
+        {
+            ImGui.TextDisabled("No identifiable emote among this mod's changed items.");
+            return;
+        }
+
+        // Single dropdown: "(do not start)" or one of the mod's emotes, fired on play.
+        const string noneLabel = "(do not start an emote)";
+        var current = this.SelectedEmote(modDirKey);
+        var comboLabel = current is null ? noneLabel : current.Name;
+
+        ImGui.TextDisabled("play emote");
+        SkinnedPanel.SameRow(RowGap);
+        ImGui.SetNextItemWidth(MathF.Max(150, columnWidth - 80));
+        if (ImGui.BeginCombo("##playemote", comboLabel))
+        {
+            if (ImGui.Selectable(noneLabel, current is null))
+                this.ClearModEmote(modDirKey);
+
+            foreach (var item in emoteItems)
+            {
+                var isOn = current is not null && current.EmoteId == item.RowId;
+                if (ImGui.Selectable(item.DisplayName, isOn))
+                    this.SetModEmote(modDirKey, item);
+
+                if (isOn)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+    }
+
+    private ModEmoteTrigger? SelectedEmote(string modDir)
+        => this.plugin.Configuration.ModEmoteSets.TryGetValue(modDir, out var list) && list.Count > 0
+            ? list[0]
+            : null;
+
+    private void SetModEmote(string modDir, ChangedItem item)
+    {
+        if (string.IsNullOrWhiteSpace(modDir) || !item.IsEmote)
+            return;
+
+        this.plugin.Configuration.ModEmoteSets[modDir] =
+        [
+            new ModEmoteTrigger { EmoteId = item.RowId, Name = item.DisplayName },
+        ];
+        this.plugin.Save();
+        this.controller.SetStatus($"Play emote: {item.DisplayName} (id {item.RowId}).");
+    }
+
+    private void ClearModEmote(string modDir)
+    {
+        if (this.plugin.Configuration.ModEmoteSets.Remove(modDir))
+        {
+            this.plugin.Save();
+            this.controller.SetStatus("Play emote: none.");
+        }
+    }
+
+    private void DrawContacts(float columnWidth)
+    {
+        this.Section("contacts", columnWidth);
+        this.EnsureContactLogosLoaded();
+
+        var discordSize = this.discordLogo?.Size ?? Vector2.Zero;
+        var nRootSize = this.nRootLogo?.Size ?? Vector2.Zero;
+        var totalWidth = discordSize.X + nRootSize.X + (this.discordLogo is not null && this.nRootLogo is not null ? RowGap : 0);
+        if (totalWidth <= 0)
+            return;
+
+        SkinnedPanel.ButtonRow(this.plugin.CurrentSkin, totalWidth);
+        if (this.DrawContactLogo("##discord_contact", this.discordLogo, null) && this.nRootLogo is not null)
+            SkinnedPanel.SameRow(RowGap);
+
+        this.DrawContactLogo("##nroot_contact", this.nRootLogo, "Join the //n_root Discord");
+    }
+
+    private bool DrawContactLogo(string id, ContactLogo? logo, string? tooltip)
+    {
+        if (logo is null)
+            return false;
+
+        var pos = ImGui.GetCursorScreenPos();
+        var clickable = tooltip is not null;
+        if (ImGui.InvisibleButton(id, logo.Size) && clickable)
+            Dalamud.Utility.Util.OpenLink(Plugin.DiscordUrl);
+
+        var hovered = ImGui.IsItemHovered();
+        if (hovered && clickable)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
+        var tint = hovered && clickable ? Vector4.One : new Vector4(0.86f, 0.86f, 0.9f, 1);
+        ImGui.GetWindowDrawList().AddImage(
+            logo.Texture.Handle,
+            pos,
+            pos + logo.Size,
+            Vector2.Zero,
+            Vector2.One,
+            ImGui.GetColorU32(tint));
+
+        if (hovered && tooltip is not null)
+            ImGui.SetTooltip(tooltip);
+
+        return true;
+    }
+
+    // Don't ask why I don't just load these at startup like normal human being...
+    private void EnsureContactLogosLoaded()
+    {
+        if (this.contactLogosLoaded)
+            return;
+
+        this.contactLogosLoaded = true;
+        this.discordLogo = LoadContactLogo("discord.png");
+        this.nRootLogo = LoadContactLogo("n_root.png");
+    }
+
+    private static ContactLogo? LoadContactLogo(string fileName)
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var pluginDirectory = Path.GetDirectoryName(assembly.Location) ?? string.Empty;
+        var path = Path.Combine(pluginDirectory, fileName);
+        if (File.Exists(path))
+        {
+            try
+            {
+                using var stream = File.OpenRead(path);
+                return LoadContactLogo(stream, fileName);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Warning(ex, "Could not load contact logo {FileName} from {Path}.", fileName, path);
+            }
+        }
+
+        var resourceName = $"xivAMP.{fileName}";
+        using var resource = assembly.GetManifestResourceStream(resourceName);
+        if (resource is null)
+            return null;
+
+        try
+        {
+            return LoadContactLogo(resource, fileName);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning(ex, "Could not load embedded contact logo {FileName}.", fileName);
+            return null;
+        }
+    }
+
+    private static ContactLogo LoadContactLogo(Stream stream, string fileName)
+    {
+        var image = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+        var texture = Plugin.TextureProvider.CreateFromRaw(
+            RawImageSpecification.Rgba32(image.Width, image.Height),
+            image.Data,
+            $"xivAMP contact {fileName}");
+        return new ContactLogo(texture, new Vector2(image.Width, image.Height));
+    }
+
     private IEnumerable<PenumbraMod> FilteredMods()
     {
         if (string.IsNullOrWhiteSpace(this.modFilter))
@@ -373,5 +593,15 @@ public sealed class SetupPopup
             label,
             size,
             enabled);
+    }
+
+    private sealed class ContactLogo(IDalamudTextureWrap texture, Vector2 size) : IDisposable
+    {
+        public IDalamudTextureWrap Texture { get; } = texture;
+
+        public Vector2 Size { get; } = size;
+
+        public void Dispose()
+            => this.Texture.Dispose();
     }
 }

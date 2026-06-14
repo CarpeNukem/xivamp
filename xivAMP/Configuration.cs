@@ -75,4 +75,19 @@ public sealed class Configuration : IPluginConfiguration
     public List<PlaylistEntry> Playlist { get; set; } = [];
 
     public List<PlaylistPreset> SavedPlaylists { get; set; } = [];
+
+    /// <summary>
+    /// Optional emote a mod fires when playback starts, keyed by mod directory. Empty / no
+    /// entry means "do not start an emote". Picked from the mod's Penumbra "Changed Items"
+    /// in Settings. (Stored as a list to allow more than one later; currently 0 or 1.)
+    /// </summary>
+    public Dictionary<string, List<ModEmoteTrigger>> ModEmoteSets { get; set; } = new();
+}
+
+[Serializable]
+public sealed class ModEmoteTrigger
+{
+    public uint EmoteId { get; set; }
+
+    public string Name { get; set; } = string.Empty;
 }

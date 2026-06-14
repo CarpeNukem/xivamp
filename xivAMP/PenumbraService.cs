@@ -20,6 +20,7 @@ public sealed class PenumbraService : IDisposable
     private readonly GetCurrentModSettingsWithTemp? getCurrentModSettingsWithTemp;
     private readonly GetModDirectory? getModDirectory;
     private readonly GetModList? getModList;
+    private readonly GetChangedItems? getChangedItems;
     private readonly RedrawObject? redrawObject;
     private readonly RemoveAllTemporaryModSettingsPlayer? removeAllTemporaryModSettingsPlayer;
     private readonly SetTemporaryModSettingsPlayer? setTemporaryModSettingsPlayer;
@@ -35,6 +36,7 @@ public sealed class PenumbraService : IDisposable
             this.getCurrentModSettingsWithTemp = new GetCurrentModSettingsWithTemp(pluginInterface);
             this.getModDirectory = new GetModDirectory(pluginInterface);
             this.getModList = new GetModList(pluginInterface);
+            this.getChangedItems = new GetChangedItems(pluginInterface);
             this.redrawObject = new RedrawObject(pluginInterface);
             this.removeAllTemporaryModSettingsPlayer = new RemoveAllTemporaryModSettingsPlayer(pluginInterface);
             this.setTemporaryModSettingsPlayer = new SetTemporaryModSettingsPlayer(pluginInterface);
@@ -147,6 +149,61 @@ public sealed class PenumbraService : IDisposable
             this.log.Error(ex, "Could not read Penumbra options for {ModDirectory}.", modDirectory);
             return Result<IReadOnlyDictionary<string, string[]>>.Fail($"Could not read Penumbra options: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// The mod's "Changed Items" as Penumbra identifies them: each entry is the changed
+    /// object's display name, the runtime type name of its identified value (so emotes /
+    /// actions can be told apart from gear), and - when the value is a Lumina row (e.g. an
+    /// Emote) - that row's id, which doubles as the in-game emote id for ExecuteEmote.
+    /// Mirrors the Changed Items tab (whole mod).
+    /// </summary>
+    public Result<IReadOnlyList<ChangedItem>> GetChangedItemsList(string modDirectory)
+    {
+        if (!this.IsAvailable || this.getChangedItems is null)
+            return Result<IReadOnlyList<ChangedItem>>.Fail("Penumbra is not available.");
+
+        if (string.IsNullOrWhiteSpace(modDirectory))
+            return Result<IReadOnlyList<ChangedItem>>.Ok(Array.Empty<ChangedItem>());
+
+        try
+        {
+            var changed = this.getChangedItems.Invoke(modDirectory, string.Empty) ?? new Dictionary<string, object?>();
+            var list = changed
+                .Select(pair => new ChangedItem(
+                    pair.Key,
+                    pair.Value?.GetType().Name ?? "Unknown",
+                    ExtractRowId(pair.Value)))
+                .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return Result<IReadOnlyList<ChangedItem>>.Ok(list);
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Could not read Penumbra changed items for {ModDirectory}.", modDirectory);
+            return Result<IReadOnlyList<ChangedItem>>.Fail($"Could not read changed items: {ex.Message}");
+        }
+    }
+
+    // Penumbra hands back the identified value as a boxed Lumina row (e.g. an Emote struct).
+    // Lumina rows expose a uint RowId; for an Emote that id is the same id ExecuteEmote wants.
+    private static uint ExtractRowId(object? value)
+    {
+        if (value is null)
+            return 0;
+
+        try
+        {
+            var prop = value.GetType().GetProperty("RowId");
+            if (prop?.GetValue(value) is { } raw)
+                return Convert.ToUInt32(raw);
+        }
+        catch
+        {
+            // Non-row value (e.g. a boxed int count) - no usable id.
+        }
+
+        return 0;
     }
 
     public Result ApplyTrack(int objectIndex, string modDirectory, string optionGroup, string optionName, bool temporary, bool redraw)

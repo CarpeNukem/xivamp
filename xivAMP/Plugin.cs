@@ -16,6 +16,7 @@ public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/xivamp";
     private const string ShortCommandName = "/xamp";
+    internal const string DiscordUrl = "https://discord.gg/kxZMbP3C5B";
 
     private readonly FileDialogManager fileDialogManager = new();
     private readonly XivAmpController controller;
@@ -28,6 +29,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         this.Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.Penumbra = new PenumbraService(PluginInterface, Log);
+        this.Emotes = new EmoteService(Log);
         this.controller = new XivAmpController(this, Log, ObjectTable);
         this.skinLoader = new WinampSkinLoader(TextureProvider);
         this.CurrentSkin = this.skinLoader.CreateFallback();
@@ -87,6 +89,8 @@ public sealed class Plugin : IDalamudPlugin
 
     internal PenumbraService Penumbra { get; }
 
+    internal EmoteService Emotes { get; }
+
     internal WinampSkin CurrentSkin { get; private set; }
 
     internal PlaylistWindow PlaylistWindow { get; }
@@ -116,6 +120,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= this.OpenConfigUi;
         PluginInterface.UiBuilder.Draw -= this.DrawUi;
         this.WindowSystem.RemoveAllWindows();
+        this.playerWindow.Dispose();
         this.CurrentSkin.Dispose();
         this.fileDialogManager.Reset();
         this.Penumbra.Dispose();
