@@ -67,6 +67,9 @@ public sealed class Configuration : IPluginConfiguration
 
     public double FallbackTrackDurationSeconds { get; set; } = 180;
 
+    /// <summary>Seconds of silence inserted between auto-advanced tracks (0 = none).</summary>
+    public double TrackGapSeconds { get; set; }
+
     public int CurrentIndex { get; set; } = -1;
 
     public List<PlaylistEntry> Playlist { get; set; } = [];

@@ -734,18 +734,21 @@ public sealed class PlayerWindow : Window
             return;
 
         var duration = this.TrackDurationSeconds();
+
+        // Hold the current track an extra "track gap" past its end before advancing, so the
+        // next track's Penumbra/Mare sync lands after this one has finished for everyone.
+        var threshold = duration + Math.Max(0, this.plugin.Configuration.TrackGapSeconds);
         var rawElapsed = this.plugin.Configuration.EstimatedSeekOffsetSeconds
             + (DateTime.UtcNow - this.plugin.Configuration.LastAppliedAtUtc).TotalSeconds;
 
-        if (rawElapsed < duration)
+        if (rawElapsed < threshold)
         {
-            // Track is still playing — clear the guard so we can advance next time.
+            // Track is still playing (or within the gap) — clear the guard for next time.
             this.autoAdvancedOptionName = string.Empty;
             return;
         }
 
-        // Elapsed >= duration: track has ended.
-        // If repeat is on, let the SCD loop — don't advance.
+        // Past the track end + gap: advance, unless repeat is on (let the SCD loop).
         if (this.plugin.Configuration.RepeatEnabled)
             return;
 

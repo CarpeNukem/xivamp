@@ -75,6 +75,23 @@ public sealed class SetupPopup
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Redraw character after applying a track.\nRequired for visual changes to appear.");
 
+        // Extra time a track is held past its end before auto-advancing, so the next
+        // track's Penumbra/Mare sync lands without cutting this one short.
+        this.BeginSetupColumn();
+        var gap = (float)this.plugin.Configuration.TrackGapSeconds;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.SliderFloat("##trackgap", ref gap, 0f, 15f, "%.1fs"))
+        {
+            this.plugin.Configuration.TrackGapSeconds = Math.Clamp(gap, 0f, 15f);
+            this.plugin.Save();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Extra time to hold a track past its end before auto-advancing,\nso the next track has time to sync before it plays.");
+
+        SkinnedPanel.SameRow(RowGap);
+        ImGui.TextDisabled("track gap");
+
         this.DrawPresetControls(columnWidth);
         this.BeginSetupColumn();
         this.Section("mod", columnWidth);

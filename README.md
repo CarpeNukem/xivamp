@@ -116,7 +116,7 @@ Both standard and RLE-compressed BMPs are supported, as are PNG versions of the 
 - **Window-shade (minimized) modes** for both the main window and the playlist - collapse to a single title bar, Winamp-style.
 - **Playlist** - add / remove / crop, drag-and-drop reordering, a footer with its own transport controls, and per-skin colors. Save and load named **playlist presets**.
 - **Add panel** - a persistent, dockable window (sits under the playlist) with separate filters for groups and options, so you can keep editing the playlist without it closing.
-- **Settings** - load/clear skins, toggle Penumbra temporary-settings and character redraw, manage playlist presets, and choose the source mod/group.
+- **Settings** - load/clear skins, toggle Penumbra temporary-settings and character redraw, set a **track gap** (extra hold time before auto-advancing), manage playlist presets, and choose the source mod/group.
 
 ---
 
