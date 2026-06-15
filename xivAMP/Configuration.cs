@@ -15,6 +15,9 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool RedrawAfterApply { get; set; } = true;
 
+    /// <summary>Keep the xivAMP windows visible when the game UI/HUD is hidden.</summary>
+    public bool KeepUiWhenHudHidden { get; set; }
+
     public string SelectedSkinPath { get; set; } = string.Empty;
 
     public float SkinScale { get; set; } = 1.0f;

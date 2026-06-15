@@ -55,6 +55,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw += this.DrawUi;
         PluginInterface.UiBuilder.OpenMainUi += this.ToggleMainUi;
         PluginInterface.UiBuilder.OpenConfigUi += this.OpenConfigUi;
+        this.ApplyUiHidePreference();
 
         this.Penumbra.PenumbraReady += this.OnPenumbraReady;
         if (!this.Penumbra.IsAvailable)
@@ -133,6 +134,13 @@ public sealed class Plugin : IDalamudPlugin
     internal void Save()
         => this.configDirty = true;
 
+    /// <summary>
+    /// Keep the xivAMP windows on screen when the game HUD is hidden (e.g. the "/hud" toggle
+    /// or screenshot mode), per the user's setting. Otherwise Dalamud hides them with the HUD.
+    /// </summary>
+    internal void ApplyUiHidePreference()
+        => PluginInterface.UiBuilder.DisableAutomaticUiHide = this.Configuration.KeepUiWhenHudHidden;
+
     private void FlushConfig(bool force = false)
     {
         if (!this.configDirty)
@@ -149,14 +157,17 @@ public sealed class Plugin : IDalamudPlugin
 
     internal void LoadConfiguredSkin()
     {
+        // Pre-upscale the sheets to the chosen render scale (1x/2x) so they stay pixel-crisp.
+        var textureScale = Math.Clamp((int)MathF.Round(SkinHelper.SkinScale(this.Configuration)), 1, 2);
+
         var defaultSkinPath = this.DefaultSkinPath();
         var skinPath = string.IsNullOrWhiteSpace(this.Configuration.SelectedSkinPath)
             ? defaultSkinPath
             : this.Configuration.SelectedSkinPath;
-        var result = this.skinLoader.Load(skinPath);
+        var result = this.skinLoader.Load(skinPath, textureScale);
         if (!result.Success && !string.Equals(skinPath, defaultSkinPath, StringComparison.OrdinalIgnoreCase))
         {
-            result = this.skinLoader.Load(defaultSkinPath);
+            result = this.skinLoader.Load(defaultSkinPath, textureScale);
             if (result.Success)
             {
                 this.Configuration.SelectedSkinPath = string.Empty;
@@ -166,7 +177,7 @@ public sealed class Plugin : IDalamudPlugin
 
         if (!result.Success)
         {
-            result = this.skinLoader.LoadEmbeddedDefault();
+            result = this.skinLoader.LoadEmbeddedDefault(textureScale);
             if (result.Success)
             {
                 this.Configuration.SelectedSkinPath = string.Empty;

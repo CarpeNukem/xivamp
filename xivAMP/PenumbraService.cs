@@ -267,28 +267,36 @@ public sealed class PenumbraService : IDisposable
     private PenumbraApiEc ApplyTemporary(int objectIndex, string modDirectory, string optionGroup, string optionName)
     {
         if (this.getCollectionForObject is null || this.getCurrentModSettingsWithTemp is null || this.setTemporaryModSettingsPlayer is null)
-            return PenumbraApiEc.NothingChanged;
+            return PenumbraApiEc.InvalidArgument;
 
-        var (valid, objectValid, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
-        if (!valid || !objectValid)
+        var (valid, _, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
+        // The second boolean only says whether the object's identifier has a direct
+        // collection assignment. It can be false while Penumbra still returns the valid
+        // effective collection inherited from Yourself or Default.
+        if (!valid)
             return PenumbraApiEc.CollectionMissing;
 
         var (resultCode, currentSettings) = this.getCurrentModSettingsWithTemp.Invoke(collectionId, modDirectory, string.Empty, false, false, TemporaryKey);
-        if (!IsSuccess(resultCode) || currentSettings is not { } settings)
+        if (!IsSuccess(resultCode))
             return resultCode;
+        if (currentSettings is not { } settings)
+            return PenumbraApiEc.ModMissing;
 
-        var (enabled, priority, settingsDict, _, _) = settings;
+        var (_, priority, settingsDict, _, _) = settings;
         var merged = settingsDict.ToDictionary(
             pair => pair.Key,
             pair => (IReadOnlyList<string>)pair.Value.ToList(),
             StringComparer.OrdinalIgnoreCase);
         merged[optionGroup] = [optionName];
 
+        // Play must work even when the mod is disabled in the player's persistent
+        // collection. This temporary override is removed when xivAMP releases control,
+        // so enabling it here does not permanently alter the user's Penumbra settings.
         return this.setTemporaryModSettingsPlayer.Invoke(
             objectIndex,
             modDirectory,
             false,
-            enabled,
+            true,
             priority,
             merged,
             TemporarySource,
@@ -301,8 +309,10 @@ public sealed class PenumbraService : IDisposable
         if (this.getCollectionForObject is null || this.trySetModSetting is null)
             return PenumbraApiEc.NothingChanged;
 
-        var (valid, objectValid, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
-        if (!valid || !objectValid)
+        var (valid, _, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
+        // See ApplyTemporary: the second flag only reports a direct assignment, not whether
+        // an (inherited) effective collection exists.
+        if (!valid)
             return PenumbraApiEc.CollectionMissing;
 
         return this.trySetModSetting.Invoke(collectionId, modDirectory, optionGroup, optionName, string.Empty);

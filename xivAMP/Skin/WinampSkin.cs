@@ -21,6 +21,12 @@ public sealed class WinampSkin : IDisposable
 
     public string SourcePath { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Integer factor the sheet textures were pre-upscaled by (nearest-neighbor) at load.
+    /// Sprite coordinates stay in native pixels, so UV math multiplies by this. 1 = native.
+    /// </summary>
+    public int TextureScale { get; init; } = 1;
+
     public IDalamudTextureWrap? Main => this.TryGetTexture("MAIN", out var texture) ? texture : null;
 
     public IDalamudTextureWrap? Playlist => this.TryGetTexture("PLEDIT", out var texture) ? texture : null;

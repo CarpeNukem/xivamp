@@ -63,8 +63,12 @@ public static class SkinRenderer
 
         position = Snap(position);
         size = Snap(size);
-        var uv0 = new Vector2(sprite.X / texture.Width, sprite.Y / texture.Height);
-        var uv1 = new Vector2((sprite.X + sprite.Width) / texture.Width, (sprite.Y + sprite.Height) / texture.Height);
+
+        // Sprite coords are native; the texture may be pre-upscaled (nearest) by TextureScale,
+        // so scale the source coords to match the larger atlas before forming UVs.
+        var ts = skin.TextureScale;
+        var uv0 = new Vector2(sprite.X * ts / texture.Width, sprite.Y * ts / texture.Height);
+        var uv1 = new Vector2((sprite.X + sprite.Width) * ts / texture.Width, (sprite.Y + sprite.Height) * ts / texture.Height);
         ImGui.GetWindowDrawList().AddImage(texture.Handle, position, position + size, uv0, uv1);
         return true;
     }

@@ -58,13 +58,6 @@ public sealed class SetupPopup : IDisposable
             this.plugin.LoadConfiguredSkin();
         }
 
-        // Scale is locked at 1.0 for now... Maybe will make x2 option later
-        if (this.plugin.Configuration.SkinScale != 1.0f)
-        {
-            this.plugin.Configuration.SkinScale = 1.0f;
-            this.plugin.Save();
-        }
-
         SkinnedPanel.SameRow(RowGap);
         if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##browse_skins", "BROWSE SKINS", new Vector2(104, ButtonHeight)))
             Dalamud.Utility.Util.OpenLink(SkinMuseumUrl);
@@ -89,6 +82,31 @@ public sealed class SetupPopup : IDisposable
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Redraw character after applying a track.\nRequired for visual changes to appear.");
+
+        SkinnedPanel.SameRow(RowGap);
+        if (this.ToggleButton("KEEP UI", this.plugin.Configuration.KeepUiWhenHudHidden, new Vector2(78, ButtonHeight)))
+        {
+            this.plugin.Configuration.KeepUiWhenHudHidden = !this.plugin.Configuration.KeepUiWhenHudHidden;
+            this.plugin.Save();
+            this.plugin.ApplyUiHidePreference();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Keep the xivAMP windows visible when the game UI/HUD is hidden\n(e.g. the hide-HUD hotkey or screenshot mode).");
+
+        // Double-size (2x) toggle: render the player/playlist at 2x with pixel-crisp,
+        // nearest-neighbor pre-scaled skin sheets (reloads the skin to rebuild the textures).
+        SkinnedPanel.SameRow(RowGap);
+        var doubleSize = this.plugin.Configuration.SkinScale >= 1.5f;
+        if (this.ToggleButton("DOUBLE", doubleSize, new Vector2(74, ButtonHeight)))
+        {
+            this.plugin.Configuration.SkinScale = doubleSize ? 1.0f : 2.0f;
+            this.plugin.Save();
+            this.plugin.LoadConfiguredSkin();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Render xivAMP at double size (2x), kept pixel-crisp.");
 
         // Extra time a track is held past its end before auto-advancing, so the next
         // track's Penumbra/Mare (or analog lol... no Mare except original Mare!.. I miss it :c..) sync lands without cutting this one short.
@@ -342,6 +360,11 @@ public sealed class SetupPopup : IDisposable
         var selectedLabel = string.IsNullOrWhiteSpace(selectedMod.Directory) ? "Choose Penumbra mod" : selectedMod.Label;
         this.BeginSetupColumn();
         ImGui.SetNextItemWidth(columnWidth);
+
+        // Pin the dropdown to the combo's width so it doesn't keep reflowing (shrinking its
+        // right edge) as the filter narrows the longest visible mod name. Long labels clip
+        // instead of widening the popup. Height is left to auto-fit.
+        ImGui.SetNextWindowSizeConstraints(new Vector2(columnWidth, 0f), new Vector2(columnWidth, float.MaxValue));
         if (!ImGui.BeginCombo("##mod", selectedLabel))
             return;
 

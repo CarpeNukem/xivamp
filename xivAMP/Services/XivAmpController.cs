@@ -92,6 +92,23 @@ public sealed class XivAmpController
         this.dataLoaded = true;
     }
 
+    /// <summary>
+    /// Re-read the selected mod's option groups from Penumbra so options added to the mod
+    /// since it was last loaded show up in the Add panel. Keeps the current selection.
+    /// </summary>
+    public void RefreshGroups()
+    {
+        if (string.IsNullOrWhiteSpace(this.plugin.Configuration.SelectedModDirectory))
+        {
+            this.Status = "Choose a Penumbra mod first.";
+            return;
+        }
+
+        this.ReloadGroups();
+        var count = this.groups.TryGetValue(this.plugin.Configuration.SelectedOptionGroup, out var options) ? options.Length : 0;
+        this.Status = count > 0 ? $"Refreshed - {count} options in group." : "Refreshed options.";
+    }
+
     public void SelectMod(string directory)
     {
         this.ResetActiveTrack("Reset previous mod option.", false);
@@ -383,9 +400,16 @@ public sealed class XivAmpController
             return;
         }
 
+        // The group's first option is the default / "off" value; don't add it when adding the
+        // whole group (it can still be added individually via its checkbox).
+        var defaultOption = this.DefaultOptionForGroup(optionGroup);
+
         var added = 0;
         foreach (var option in options)
         {
+            if (string.Equals(option, defaultOption, StringComparison.OrdinalIgnoreCase))
+                continue;
+
             if (this.plugin.Configuration.Playlist.Any(entry => this.IsEntryIdentity(entry, optionGroup, option)))
                 continue;
 

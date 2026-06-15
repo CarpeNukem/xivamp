@@ -53,7 +53,7 @@ public sealed class PlaylistWindow : Window
     private float shadeScrollOffset;
 
     public PlaylistWindow(Plugin plugin, XivAmpController controller)
-        : base("xivAMP Playlist###xivAMPPlaylist", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize)
+        : base("xivAMP Playlist###xivAMPPlaylist", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoBackground)
     {
         this.plugin = plugin;
         this.controller = controller;
@@ -68,6 +68,10 @@ public sealed class PlaylistWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.Zero);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
 
+        // Zero the window border so its inset clip rect doesn't crop the right/bottom of the
+        // playlist sprites (same fix as the player window).
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0);
+
         this.IsOpen = this.plugin.Configuration.PlaylistWindowVisible && this.plugin.PlayerWindow.IsOpen;
         this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize());
         if (this.dockedPosition is { } position)
@@ -79,7 +83,7 @@ public sealed class PlaylistWindow : Window
 
     public override void PostDraw()
     {
-        ImGui.PopStyleVar(2);
+        ImGui.PopStyleVar(3);
     }
 
     private Vector2 CurrentSize()
@@ -157,8 +161,7 @@ public sealed class PlaylistWindow : Window
     {
         this.plugin.Configuration.PlaylistWindowShade = !this.plugin.Configuration.PlaylistWindowShade;
         this.plugin.Save();
-        var scale = SkinHelper.SkinScale(this.plugin.Configuration);
-        this.Size = this.CurrentSize() * scale;
+        this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize());
     }
 
     private void DrawPlaylistShade(Vector2 origin, Vector2 baseSize, float scale)
@@ -781,8 +784,12 @@ public sealed class PlaylistWindow : Window
             this.DrawAddOptionsList(new Vector2(rightX, listTop), new Vector2(trackWidth, listHeight), options.Where(this.MatchesAddFilter).ToList(), rowHeight);
         }
 
-        var buttonTotal = 96 + gap + 112 + gap + 64;
+        var buttonTotal = 80 + gap + 96 + gap + 112 + gap + 64;
         ImGui.SetCursorScreenPos(new Vector2(contentStart.X + MathF.Max(0, (contentWidth - buttonTotal) * 0.5f), buttonRowY));
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##refresh_tracks", "REFRESH", new Vector2(80, 15)))
+            this.controller.RefreshGroups();
+
+        SkinnedPanel.SameRow(gap);
         if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##add_group", "ADD GROUP", new Vector2(96, 15)))
             this.controller.AddPlaylistGroup(this.addGroup);
 
@@ -1388,6 +1395,11 @@ public sealed class PlaylistWindow : Window
         var baseSize = size / scale;
         if (this.plugin.CurrentSkin.HasPlaylistTexture)
         {
+            // Fill the whole window with the playlist background first, so no strip between
+            // the frame sprites (e.g. just under the title bar) is left transparent now that
+            // the window itself has no ImGui background.
+            ImGui.GetWindowDrawList().AddRectFilled(origin, origin + size, ImGui.GetColorU32(this.plugin.CurrentSkin.PlaylistColors.Background));
+
             var selectedSuffix = string.Empty;
             SkinRenderer.DrawSprite(this.plugin.CurrentSkin, $"PLAYLIST_TOP_LEFT_CORNER{selectedSuffix}", origin, new Vector2(25, 20) * scale);
             var titleX = MathF.Max(25, MathF.Floor((baseSize.X - 100) * 0.5f));
@@ -1401,7 +1413,6 @@ public sealed class PlaylistWindow : Window
             SkinRenderer.DrawSprite(this.plugin.CurrentSkin, "PLAYLIST_BOTTOM_LEFT_CORNER", origin + new Vector2(0, baseSize.Y - 38) * scale, new Vector2(125, 38) * scale);
             SkinRenderer.TileHorizontal(this.plugin.CurrentSkin, "PLAYLIST_BOTTOM_TILE", origin + new Vector2(125, baseSize.Y - 38) * scale, Math.Max(0, baseSize.X - 275) * scale, scale);
             SkinRenderer.DrawSprite(this.plugin.CurrentSkin, "PLAYLIST_BOTTOM_RIGHT_CORNER", origin + new Vector2(baseSize.X - 150, baseSize.Y - 38) * scale, new Vector2(150, 38) * scale);
-            ImGui.GetWindowDrawList().AddRectFilled(origin + new Vector2(12, 23) * scale, origin + new Vector2(baseSize.X - 20, baseSize.Y - 38) * scale, ImGui.GetColorU32(this.plugin.CurrentSkin.PlaylistColors.Background));
             return;
         }
 
@@ -1418,7 +1429,11 @@ public sealed class PlaylistWindow : Window
         if (!this.plugin.Configuration.HasPlayerWindowPosition)
             return;
 
-        var mainHeight = this.plugin.PlayerWindow.CurrentSize.Y * scale;
+        // Prefer the player's actual rendered height so the playlist sits flush against its
+        // real bottom edge at any UI scale; fall back to the computed height if not drawn yet.
+        var mainHeight = this.plugin.PlayerWindow.RenderedHeight > 0
+            ? this.plugin.PlayerWindow.RenderedHeight
+            : this.plugin.PlayerWindow.CurrentSize.Y * scale;
         this.DockTo(new Vector2(this.plugin.Configuration.PlayerWindowX, this.plugin.Configuration.PlayerWindowY + mainHeight));
     }
 

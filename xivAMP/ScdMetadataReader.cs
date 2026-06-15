@@ -32,6 +32,9 @@ public static class ScdMetadataReader
         public ScdCodec Codec { get; init; }
         public long TotalSamples { get; init; }
 
+        /// <summary>Size of the actual OGG audio payload (Vorbis), if measured; 0 otherwise.</summary>
+        public long AudioBytes { get; init; }
+
         public double DurationSeconds
         {
             get
@@ -57,10 +60,16 @@ public static class ScdMetadataReader
             get
             {
                 var duration = DurationSeconds;
-                if (duration <= 0 || DataLength <= 0)
+                if (duration <= 0)
                     return 0;
 
-                return (int)(DataLength * 8.0 / duration / 1000);
+                // Measure from the actual OGG audio payload when we have it (the SCD's reported
+                // data length can include non-audio bytes that inflate the rate); else fall back.
+                var bytes = AudioBytes > 0 ? AudioBytes : DataLength;
+                if (bytes <= 0)
+                    return 0;
+
+                return (int)(bytes * 8.0 / duration / 1000);
             }
         }
     }
@@ -154,10 +163,12 @@ public static class ScdMetadataReader
             if (sampleRate is < 8000 or > 192000 || numChannels is < 1 or > 8 || dataLength <= 0)
                 continue;
 
-            // For Vorbis, find the last OGG page to get accurate total samples.
+            // For Vorbis, measure the real OGG stream: total samples (granule) and the audio
+            // byte span (first page to end of last page), so the bitrate reflects only audio.
             long totalSamples = 0;
+            long audioBytes = 0;
             if (codec is ScdCodec.Vorbis)
-                totalSamples = FindLastOggGranule(data);
+                TryGetOggExtent(data, out totalSamples, out audioBytes);
 
             info = new ScdAudioInfo
             {
@@ -166,6 +177,7 @@ public static class ScdMetadataReader
                 SampleRate = sampleRate,
                 Codec = codec,
                 TotalSamples = totalSamples,
+                AudioBytes = audioBytes,
             };
 
             return true;
@@ -175,26 +187,62 @@ public static class ScdMetadataReader
     }
 
     /// <summary>
-    /// Scan backwards from the end of the file to find the last OGG page header
-    /// and return its granule position (total decoded samples).
+    /// Measure the embedded OGG stream: the granule position of the last page (total decoded
+    /// samples) and the audio byte span from the first page to the end of the last page. The
+    /// byte span excludes the SCD's own header/seek-table bytes, giving an accurate bitrate.
     /// </summary>
-    private static long FindLastOggGranule(byte[] data)
+    private static bool TryGetOggExtent(byte[] data, out long totalSamples, out long audioBytes)
     {
-        // OGG page header: "OggS" (4 bytes), version (1), flags (1), granule (8 bytes at offset +6).
-        // Scan backwards to find the last "OggS" marker.
-        for (var i = data.Length - 14; i >= 0; i--)
+        totalSamples = 0;
+        audioBytes = 0;
+
+        // First OGG page (forward scan).
+        var first = -1;
+        for (var i = 0; i + 4 <= data.Length; i++)
         {
-            if (data[i] == OggMagic[0]
-                && data[i + 1] == OggMagic[1]
-                && data[i + 2] == OggMagic[2]
-                && data[i + 3] == OggMagic[3])
+            if (IsOggMarker(data, i))
             {
-                var granule = BitConverter.ToInt64(data, i + 6);
-                if (granule > 0)
-                    return granule;
+                first = i;
+                break;
             }
         }
 
-        return 0;
+        if (first < 0)
+            return false;
+
+        // Last OGG page (backward scan); need room for the 27-byte page header.
+        var last = -1;
+        for (var i = data.Length - 27; i >= first; i--)
+        {
+            if (IsOggMarker(data, i))
+            {
+                last = i;
+                break;
+            }
+        }
+
+        if (last < 0)
+            return false;
+
+        totalSamples = BitConverter.ToInt64(data, last + 6);
+
+        // Page length = 27-byte header + segment table + sum of segment sizes.
+        var segmentCount = data[last + 26];
+        long pageLength = 27 + segmentCount;
+        if (last + 27 + segmentCount <= data.Length)
+        {
+            for (var s = 0; s < segmentCount; s++)
+                pageLength += data[last + 27 + s];
+        }
+
+        var lastPageEnd = Math.Min(data.Length, last + pageLength);
+        audioBytes = lastPageEnd - first;
+        return true;
     }
+
+    private static bool IsOggMarker(byte[] data, int i)
+        => data[i] == OggMagic[0]
+            && data[i + 1] == OggMagic[1]
+            && data[i + 2] == OggMagic[2]
+            && data[i + 3] == OggMagic[3];
 }

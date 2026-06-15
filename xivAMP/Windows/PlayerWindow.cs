@@ -28,7 +28,7 @@ public sealed class PlayerWindow : Window
     private string autoAdvancedOptionName = string.Empty;
 
     public PlayerWindow(Plugin plugin, XivAmpController controller, FileDialogManager fileDialogManager)
-        : base("xivAMP###xivAMPPlayer", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize)
+        : base("xivAMP###xivAMPPlayer", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoBackground)
     {
         this.plugin = plugin;
         this.controller = controller;
@@ -38,6 +38,10 @@ public sealed class PlayerWindow : Window
     }
 
     public Vector2 CurrentSize => this.plugin.Configuration.MainWindowShade ? ShadeSize : BaseSize;
+
+    /// <summary>Actual on-screen height of the player window last frame (px). Used so the
+    /// playlist docks flush against the real bottom edge regardless of UI scale/rounding.</summary>
+    internal float RenderedHeight { get; private set; }
 
     internal void Dispose()
         => this.setupPopup.Dispose();
@@ -59,6 +63,11 @@ public sealed class PlayerWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, Vector2.Zero);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
 
+        // The default window border insets ImGui's content clip rect on every side, cropping
+        // the right/bottom edges of the skin sprite (275x116 -> ~271x112). Zero it so the full
+        // sprite is drawable corner-to-corner.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0);
+
         this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize);
         if (this.pendingPosition is { } position)
         {
@@ -78,21 +87,22 @@ public sealed class PlayerWindow : Window
 
     public override void PostDraw()
     {
-        // Balance the WindowMinSize + WindowPadding style vars pushed in PreDraw.
-        ImGui.PopStyleVar(2);
+        // Balance the WindowMinSize + WindowPadding + WindowBorderSize vars pushed in PreDraw.
+        ImGui.PopStyleVar(3);
     }
 
     public override void Draw()
     {
         var scale = SkinHelper.SkinScale(this.plugin.Configuration);
-        this.Size = this.CurrentSize * scale;
+        this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize);
         var origin = ImGui.GetWindowPos();
+        this.RenderedHeight = ImGui.GetWindowSize().Y;
 
         if (!this.draggingTitlebar)
             this.PositionCondition = ImGuiCond.None;
 
         this.ThrottledSavePosition(origin);
-        this.plugin.PlaylistWindow.DockTo(origin + new Vector2(0, this.CurrentSize.Y * scale));
+        this.plugin.PlaylistWindow.DockTo(origin + new Vector2(0, this.RenderedHeight));
 
         // Never let a drawing/handler exception escape Draw: if it did, ImGui's
         // Begin/End and style-var stacks would be left unbalanced and crash the game.
@@ -419,8 +429,7 @@ public sealed class PlayerWindow : Window
 
         // Re-apply the (now smaller/larger) size immediately so the window does not
         // flash at the old dimensions for a frame.
-        var scale = SkinHelper.SkinScale(this.plugin.Configuration);
-        this.Size = this.CurrentSize * scale;
+        this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize);
     }
 
     private void DrawVisualizer(Vector2 origin, float scale)
@@ -685,7 +694,7 @@ public sealed class PlayerWindow : Window
         var newPosition = mouse - this.dragOffset;
         this.pendingPosition = newPosition;
         this.ThrottledSavePosition(newPosition);
-        this.plugin.PlaylistWindow.DockTo(newPosition + new Vector2(0, this.CurrentSize.Y * scale));
+        this.plugin.PlaylistWindow.DockTo(newPosition + new Vector2(0, this.RenderedHeight));
     }
 
     private static bool IsInRect(Vector2 point, Vector2 min, Vector2 max)
@@ -702,7 +711,7 @@ public sealed class PlayerWindow : Window
         var drawList = ImGui.GetWindowDrawList();
         var size = BaseSize * scale;
         drawList.AddRectFilled(origin, origin + size, ImGui.GetColorU32(new Vector4(0.13f, 0.13f, 0.18f, 1.0f)));
-        drawList.AddRectFilled(origin + new Vector2(4, 4) * scale, origin + new Vector2(271, 112) * scale, ImGui.GetColorU32(new Vector4(0.24f, 0.24f, 0.32f, 1.0f)));
+        drawList.AddRectFilled(origin + new Vector2(4, 4) * scale, origin + new Vector2(275, 116) * scale, ImGui.GetColorU32(new Vector4(0.24f, 0.24f, 0.32f, 1.0f)));
         drawList.AddRectFilled(origin + new Vector2(24, 22) * scale, origin + new Vector2(266, 77) * scale, ImGui.GetColorU32(new Vector4(0.0f, 0.0f, 0.0f, 1.0f)));
         drawList.AddRect(origin, origin + size, ImGui.GetColorU32(new Vector4(0.72f, 0.72f, 0.82f, 1.0f)));
     }

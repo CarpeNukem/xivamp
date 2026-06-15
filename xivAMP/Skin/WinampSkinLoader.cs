@@ -40,7 +40,7 @@ public sealed class WinampSkinLoader
         this.textureProvider = textureProvider;
     }
 
-    public Result<WinampSkin> Load(string path)
+    public Result<WinampSkin> Load(string path, int textureScale = 1)
     {
         if (string.IsNullOrWhiteSpace(path))
             return Result<WinampSkin>.Ok(this.CreateFallback("Built-in"));
@@ -51,7 +51,7 @@ public sealed class WinampSkinLoader
         try
         {
             using var archive = ZipFile.OpenRead(path);
-            return this.LoadArchive(archive, Path.GetFileNameWithoutExtension(path), path);
+            return this.LoadArchive(archive, Path.GetFileNameWithoutExtension(path), path, textureScale);
         }
         catch (Exception ex)
         {
@@ -59,7 +59,7 @@ public sealed class WinampSkinLoader
         }
     }
 
-    public Result<WinampSkin> LoadEmbeddedDefault()
+    public Result<WinampSkin> LoadEmbeddedDefault(int textureScale = 1)
     {
         try
         {
@@ -68,7 +68,7 @@ public sealed class WinampSkinLoader
                 return Result<WinampSkin>.Fail("Embedded default skin was not found.");
 
             using var archive = new ZipArchive(stream, ZipArchiveMode.Read, false);
-            return this.LoadArchive(archive, "base-2.91", string.Empty);
+            return this.LoadArchive(archive, "base-2.91", string.Empty, textureScale);
         }
         catch (Exception ex)
         {
@@ -86,8 +86,9 @@ public sealed class WinampSkinLoader
     private static string NormalizeEntryName(string name)
         => name.Replace('\\', '/').TrimStart('/').Split('/').Last();
 
-    private Result<WinampSkin> LoadArchive(ZipArchive archive, string name, string sourcePath)
+    private Result<WinampSkin> LoadArchive(ZipArchive archive, string name, string sourcePath, int textureScale)
     {
+        textureScale = Math.Clamp(textureScale, 1, 4);
         var entries = archive.Entries.ToDictionary(
             entry => NormalizeEntryName(entry.FullName),
             entry => entry,
@@ -96,8 +97,8 @@ public sealed class WinampSkinLoader
         var textures = new Dictionary<string, IDalamudTextureWrap>(StringComparer.OrdinalIgnoreCase);
         foreach (var sheet in SkinSheets)
         {
-            var texture = this.TryLoadTexture(entries, $"{sheet}.bmp", $"xivAMP skin {sheet}")
-                ?? this.TryLoadTexture(entries, $"{sheet}.png", $"xivAMP skin {sheet}");
+            var texture = this.TryLoadTexture(entries, $"{sheet}.bmp", $"xivAMP skin {sheet}", textureScale)
+                ?? this.TryLoadTexture(entries, $"{sheet}.png", $"xivAMP skin {sheet}", textureScale);
             if (texture is not null)
                 textures[sheet] = texture;
         }
@@ -105,7 +106,7 @@ public sealed class WinampSkinLoader
         var colors = this.LoadPlaylistColors(entries);
         var selectedSkinHasGenEx = textures.ContainsKey("GENEX");
         var genColors = selectedSkinHasGenEx ? this.LoadGenColors(entries) : new GenSkinColors();
-        this.FillMissingGenericTextures(textures, ref genColors, selectedSkinHasGenEx);
+        this.FillMissingGenericTextures(textures, ref genColors, selectedSkinHasGenEx, textureScale);
 
         if (!textures.ContainsKey("MAIN") && !textures.ContainsKey("PLEDIT"))
             return Result<WinampSkin>.Fail("Skin did not contain a main or pledit texture.");
@@ -114,6 +115,7 @@ public sealed class WinampSkinLoader
         {
             Name = name,
             SourcePath = sourcePath,
+            TextureScale = textureScale,
             PlaylistColors = colors,
             GenColors = genColors,
             VisualizerColors = this.LoadVisualizerColors(entries),
@@ -171,7 +173,8 @@ public sealed class WinampSkinLoader
     private void FillMissingGenericTextures(
         Dictionary<string, IDalamudTextureWrap> textures,
         ref GenSkinColors genColors,
-        bool selectedSkinHasGenEx)
+        bool selectedSkinHasGenEx,
+        int textureScale)
     {
         if (textures.ContainsKey("GEN") && textures.ContainsKey("GENEX"))
             return;
@@ -191,8 +194,8 @@ public sealed class WinampSkinLoader
             if (textures.ContainsKey(sheet))
                 continue;
 
-            var texture = this.TryLoadTexture(entries, $"{sheet}.bmp", $"xivAMP default skin {sheet}")
-                ?? this.TryLoadTexture(entries, $"{sheet}.png", $"xivAMP default skin {sheet}");
+            var texture = this.TryLoadTexture(entries, $"{sheet}.bmp", $"xivAMP default skin {sheet}", textureScale)
+                ?? this.TryLoadTexture(entries, $"{sheet}.png", $"xivAMP default skin {sheet}", textureScale);
             if (texture is not null)
                 textures[sheet] = texture;
         }
@@ -240,7 +243,7 @@ public sealed class WinampSkinLoader
         return new Vector4(color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, 1.0f);
     }
 
-    private IDalamudTextureWrap? TryLoadTexture(IReadOnlyDictionary<string, ZipArchiveEntry> entries, string fileName, string debugName)
+    private IDalamudTextureWrap? TryLoadTexture(IReadOnlyDictionary<string, ZipArchiveEntry> entries, string fileName, string debugName, int textureScale)
     {
         if (!entries.TryGetValue(fileName, out var entry))
             return null;
@@ -255,10 +258,7 @@ public sealed class WinampSkinLoader
             memory.Position = 0;
             var image = ImageResult.FromStream(memory, ColorComponents.RedGreenBlueAlpha);
             FixZeroAlpha(image.Data);
-            return this.textureProvider.CreateFromRaw(
-                RawImageSpecification.Rgba32(image.Width, image.Height),
-                image.Data,
-                debugName);
+            return this.CreateTexture(image.Data, image.Width, image.Height, textureScale, debugName);
         }
         catch
         {
@@ -275,15 +275,58 @@ public sealed class WinampSkinLoader
                 graphics.DrawImage(source, 0, 0, source.Width, source.Height);
 
             var rgba = BitmapToRgba(bitmap);
-            return this.textureProvider.CreateFromRaw(
-                RawImageSpecification.Rgba32(bitmap.Width, bitmap.Height),
-                rgba,
-                debugName);
+            return this.CreateTexture(rgba, bitmap.Width, bitmap.Height, textureScale, debugName);
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Create a texture from RGBA bytes, pre-upscaled by <paramref name="textureScale"/> with
+    /// nearest-neighbor so it stays pixel-crisp when the skin is rendered larger (Dalamud only
+    /// samples ImGui textures bilinearly, which would otherwise blur/bleed pixel-art skins).
+    /// </summary>
+    private IDalamudTextureWrap CreateTexture(byte[] rgba, int width, int height, int textureScale, string debugName)
+    {
+        if (textureScale > 1)
+        {
+            rgba = UpscaleNearest(rgba, width, height, textureScale);
+            width *= textureScale;
+            height *= textureScale;
+        }
+
+        return this.textureProvider.CreateFromRaw(RawImageSpecification.Rgba32(width, height), rgba, debugName);
+    }
+
+    private static byte[] UpscaleNearest(byte[] rgba, int width, int height, int factor)
+    {
+        var dstWidth = width * factor;
+        var dst = new byte[dstWidth * height * factor * 4];
+        var dstStride = dstWidth * 4;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var src = (y * width + x) * 4;
+                byte r = rgba[src], g = rgba[src + 1], b = rgba[src + 2], a = rgba[src + 3];
+                for (var dy = 0; dy < factor; dy++)
+                {
+                    var rowBase = ((y * factor) + dy) * dstStride + (x * factor * 4);
+                    for (var dx = 0; dx < factor; dx++)
+                    {
+                        var di = rowBase + (dx * 4);
+                        dst[di] = r;
+                        dst[di + 1] = g;
+                        dst[di + 2] = b;
+                        dst[di + 3] = a;
+                    }
+                }
+            }
+        }
+
+        return dst;
     }
 
     private static void FixZeroAlpha(byte[] rgba)

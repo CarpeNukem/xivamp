@@ -141,10 +141,10 @@ public static class WinampSprites
         ["MAIN_TITLE_BAR_SELECTED"] = new("TITLEBAR", 27, 0, 275, 14),
         // Window shade mode title bars (3rd/4th rows of TITLEBAR.bmp).
         ["MAIN_SHADE_BACKGROUND_SELECTED"] = new("TITLEBAR", 27, 29, 275, 14),
-        ["MAIN_SHADE_BACKGROUND"] = new("TITLEBAR", 27, 43, 275, 14),
+        ["MAIN_SHADE_BACKGROUND"] = new("TITLEBAR", 27, 42, 275, 14),
         // Window shade mini position bar (5th row of TITLEBAR.bmp).
         ["MAIN_SHADE_POSITION_BACKGROUND"] = new("TITLEBAR", 0, 36, 17, 7),
-        ["MAIN_SHADE_POSITION_THUMB"] = new("TITLEBAR", 17, 36, 10, 7),
+        ["MAIN_SHADE_POSITION_THUMB"] = new("TITLEBAR", 17, 36, 9, 7),
         ["MAIN_PLAYING_INDICATOR"] = new("PLAYPAUS", 0, 0, 9, 9),
         ["MAIN_PAUSED_INDICATOR"] = new("PLAYPAUS", 9, 0, 9, 9),
         ["MAIN_STOPPED_INDICATOR"] = new("PLAYPAUS", 18, 0, 9, 9),

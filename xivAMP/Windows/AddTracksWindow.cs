@@ -12,13 +12,13 @@ namespace xivAMP.Windows;
 /// </summary>
 public sealed class AddTracksWindow : Window
 {
-    public static readonly Vector2 MinSize = new(420, 220);
+    public static readonly Vector2 MinSize = new(460, 220);
     private static readonly Vector2 DefaultSize = new(560, 330);
 
     private readonly Plugin plugin;
 
     public AddTracksWindow(Plugin plugin)
-        : base("xivAMP Add Tracks###xivAMPAdd", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize)
+        : base("xivAMP Add Tracks###xivAMPAdd", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoBackground)
     {
         this.plugin = plugin;
     }
