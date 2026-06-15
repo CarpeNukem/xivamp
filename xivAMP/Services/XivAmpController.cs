@@ -93,6 +93,18 @@ public sealed class XivAmpController
     }
 
     /// <summary>
+    /// Re-read the Penumbra mod list so mods installed/renamed since load appear in the mod
+    /// dropdown. Leaves the current selection, groups and playlist untouched.
+    /// </summary>
+    public void RefreshMods()
+    {
+        this.dataLoaded = true;
+        var modsResult = this.plugin.Penumbra.GetMods();
+        if (modsResult.Success && modsResult.Value is not null)
+            this.mods = modsResult.Value;
+    }
+
+    /// <summary>
     /// Re-read the selected mod's option groups from Penumbra so options added to the mod
     /// since it was last loaded show up in the Add panel. Keeps the current selection.
     /// </summary>

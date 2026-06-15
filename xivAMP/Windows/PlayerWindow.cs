@@ -22,7 +22,6 @@ public sealed class PlayerWindow : Window
     private bool appliedInitialPosition;
     private bool draggingTitlebar;
     private Vector2 dragOffset;
-    private Vector2? pendingPosition;
     private float scrollOffset;
     private DateTime lastPositionSave;
     private string autoAdvancedOptionName = string.Empty;
@@ -69,11 +68,15 @@ public sealed class PlayerWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0);
 
         this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize);
-        if (this.pendingPosition is { } position)
+
+        // While dragging the titlebar, position the window at the live cursor in PreDraw (which
+        // runs before Begin) so it lands on the current frame's mouse position. Deferring this to
+        // the next frame made the window trail the cursor - and trail the playlist, which is
+        // positioned from the player's Draw the same frame.
+        if (this.draggingTitlebar)
         {
-            this.Position = position;
+            this.Position = ImGui.GetIO().MousePos - this.dragOffset;
             this.PositionCondition = ImGuiCond.Always;
-            this.pendingPosition = null;
             return;
         }
 
@@ -672,8 +675,10 @@ public sealed class PlayerWindow : Window
         }
         else
         {
+            // Stop the drag region before the shade button (254) so hovering it shows the
+            // button's finger cursor, not the window-move cursor.
             hovered = IsInRect(mouse, origin, origin + new Vector2(5, 14) * scale)
-                || IsInRect(mouse, origin + new Vector2(16, 0) * scale, origin + new Vector2(263, 14) * scale);
+                || IsInRect(mouse, origin + new Vector2(16, 0) * scale, origin + new Vector2(252, 14) * scale);
         }
 
         if (hovered)
@@ -691,10 +696,10 @@ public sealed class PlayerWindow : Window
         if (!this.draggingTitlebar)
             return;
 
-        var newPosition = mouse - this.dragOffset;
-        this.pendingPosition = newPosition;
-        this.ThrottledSavePosition(newPosition);
-        this.plugin.PlaylistWindow.DockTo(newPosition + new Vector2(0, this.RenderedHeight));
+        // Position is applied in PreDraw from the live cursor; just persist it here. The
+        // playlist follows the player's actual rendered position via the DockTo in Draw, so
+        // both stay in sync and track the cursor without a frame of lag.
+        this.ThrottledSavePosition(mouse - this.dragOffset);
     }
 
     private static bool IsInRect(Vector2 point, Vector2 min, Vector2 max)

@@ -370,7 +370,12 @@ public sealed class SetupPopup : IDisposable
 
         ImGui.SetNextItemWidth(-1);
         if (ImGui.IsWindowAppearing())
+        {
+            // Refresh the mod list from Penumbra each time the dropdown opens, so newly
+            // installed/renamed mods appear without reloading the plugin.
+            this.controller.RefreshMods();
             ImGui.SetKeyboardFocusHere();
+        }
 
         ImGui.InputTextWithHint("##modfilter", "filter mods", ref this.modFilter, 128);
         ImGui.Separator();

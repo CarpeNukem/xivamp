@@ -16,6 +16,7 @@ public sealed class PlaylistWindow : Window
     private const float WidthStep = 25;
     private const float HeightStep = 29;
     private const float ShadeHeight = 14;
+    private const float DockSnapDistance = 26;
 
     private readonly Plugin plugin;
     private readonly XivAmpController controller;
@@ -42,6 +43,8 @@ public sealed class PlaylistWindow : Window
     private int remMenuOpenedFrame = -1;
     private Vector2 remMenuPosition;
     private Vector2? dockedPosition;
+    private bool draggingTitlebar;
+    private Vector2 titlebarDragOffset;
     private float scrollOffset;
     private bool draggingScrollbar;
     private float scrollbarDragStartY;
@@ -74,9 +77,42 @@ public sealed class PlaylistWindow : Window
 
         this.IsOpen = this.plugin.Configuration.PlaylistWindowVisible && this.plugin.PlayerWindow.IsOpen;
         this.Size = SkinHelper.Scaled(this.plugin.Configuration, this.CurrentSize());
-        if (this.dockedPosition is { } position)
+
+        // Dragging the titlebar: follow the live cursor. Snap back to docked if dragged close
+        // to the docked slot (just below the main window); otherwise undock and remember pos.
+        if (this.draggingTitlebar)
         {
-            this.Position = position;
+            var target = ImGui.GetIO().MousePos - this.titlebarDragOffset;
+            var snap = DockSnapDistance * SkinHelper.SkinScale(this.plugin.Configuration);
+            if (this.dockedPosition is { } dock && Vector2.Distance(target, dock) <= snap)
+            {
+                this.plugin.Configuration.PlaylistDocked = true;
+                this.Position = dock;
+            }
+            else
+            {
+                this.plugin.Configuration.PlaylistDocked = false;
+                this.plugin.Configuration.HasPlaylistWindowPosition = true;
+                this.plugin.Configuration.PlaylistWindowX = target.X;
+                this.plugin.Configuration.PlaylistWindowY = target.Y;
+                this.Position = target;
+            }
+
+            this.PositionCondition = ImGuiCond.Always;
+            return;
+        }
+
+        if (this.plugin.Configuration.PlaylistDocked)
+        {
+            if (this.dockedPosition is { } position)
+            {
+                this.Position = position;
+                this.PositionCondition = ImGuiCond.Always;
+            }
+        }
+        else if (this.plugin.Configuration.HasPlaylistWindowPosition)
+        {
+            this.Position = new Vector2(this.plugin.Configuration.PlaylistWindowX, this.plugin.Configuration.PlaylistWindowY);
             this.PositionCondition = ImGuiCond.Always;
         }
     }
@@ -113,6 +149,8 @@ public sealed class PlaylistWindow : Window
         // Keep any drawing/handler exception from escaping Draw and unbalancing ImGui.
         try
         {
+            this.HandlePlaylistTitlebarDrag(origin, baseSize, scale);
+
             if (this.plugin.Configuration.PlaylistWindowShade)
             {
                 this.DrawPlaylistShade(origin, baseSize, scale);
@@ -141,6 +179,32 @@ public sealed class PlaylistWindow : Window
         {
             Plugin.Log.Error(ex, "xivAMP playlist window draw failed.");
             this.controller.SetStatus($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandlePlaylistTitlebarDrag(Vector2 origin, Vector2 baseSize, float scale)
+    {
+        // Drag the playlist titlebar to move it. Dragging away from the docked slot undocks it;
+        // PreDraw re-docks (snaps) if it's brought back near the slot. The actual positioning is
+        // done in PreDraw from the live cursor (so it tracks tightly, like the main window).
+        var barHeight = (this.plugin.Configuration.PlaylistWindowShade ? ShadeHeight : 20f) * scale;
+        var dragWidth = MathF.Max(0, (baseSize.X - 25) * scale); // leave the collapse/close buttons clickable
+        var mouse = ImGui.GetIO().MousePos;
+        var hovered = mouse.X >= origin.X && mouse.X <= origin.X + dragWidth
+            && mouse.Y >= origin.Y && mouse.Y <= origin.Y + barHeight;
+
+        if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            this.draggingTitlebar = true;
+            this.titlebarDragOffset = mouse - origin;
+        }
+
+        if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            if (this.draggingTitlebar)
+                this.plugin.Save();
+
+            this.draggingTitlebar = false;
         }
     }
 
@@ -646,8 +710,12 @@ public sealed class PlaylistWindow : Window
 
         position = Snap(position);
         size = Snap(size);
-        var uv0 = new Vector2(sprite.X / texture.Width, sprite.Y / texture.Height);
-        var uv1 = new Vector2((sprite.X + sprite.Width) / texture.Width, (sprite.Y + sprite.Height) / texture.Height);
+
+        // Match SkinRenderer: sprite coords are native, the texture may be pre-upscaled by
+        // TextureScale (2x mode), so scale the source coords before forming UVs.
+        var ts = this.plugin.CurrentSkin.TextureScale;
+        var uv0 = new Vector2(sprite.X * ts / texture.Width, sprite.Y * ts / texture.Height);
+        var uv1 = new Vector2((sprite.X + sprite.Width) * ts / texture.Width, (sprite.Y + sprite.Height) * ts / texture.Height);
         ImGui.GetForegroundDrawList().AddImage(texture.Handle, position, position + size, uv0, uv1);
         return true;
     }
@@ -845,6 +913,12 @@ public sealed class PlaylistWindow : Window
 
         ImGui.GetWindowDrawList().AddRectFilled(listOrigin, listOrigin + listSize, ImGui.GetColorU32(colors.ItemBackground));
         ImGui.SetCursorScreenPos(listOrigin);
+
+        // Zero child padding + item spacing so the rendered row pitch is exactly rowHeight,
+        // matching contentHeight/maxScroll; otherwise the GEN style's padding/spacing makes
+        // the list taller than computed and the last rows become unreachable.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, Vector2.Zero);
         ImGui.BeginChild("add_groups", new Vector2(childWidth, listSize.Y), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         ImGui.SetCursorPosY(-this.addGroupScrollOffset);
 
@@ -877,6 +951,7 @@ public sealed class PlaylistWindow : Window
             ImGui.TextDisabled("No groups");
 
         ImGui.EndChild();
+        ImGui.PopStyleVar(2);
 
         if (needsScrollbar)
         {
@@ -911,6 +986,11 @@ public sealed class PlaylistWindow : Window
 
         ImGui.SetCursorScreenPos(listOrigin);
         ImGui.GetWindowDrawList().AddRectFilled(listOrigin, listOrigin + listSize, ImGui.GetColorU32(this.plugin.CurrentSkin.GenColors.ItemBackground));
+
+        // Zero child padding + item spacing so the row pitch matches contentHeight/maxScroll
+        // (same fix as the groups list - otherwise the bottom options can't be scrolled to).
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, Vector2.Zero);
         ImGui.BeginChild("add_options", new Vector2(childWidth, listHeight), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         ImGui.SetCursorPosY(-this.addScrollOffset);
         for (var index = 0; index < options.Count; index++)
@@ -971,6 +1051,7 @@ public sealed class PlaylistWindow : Window
         }
 
         ImGui.EndChild();
+        ImGui.PopStyleVar(2);
         if (needsScrollbar)
         {
             this.DrawAddScrollbar(

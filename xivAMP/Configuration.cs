@@ -24,6 +24,15 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool PlaylistWindowVisible { get; set; } = true;
 
+    /// <summary>When docked, the playlist snaps below the main window; when not, it's free.</summary>
+    public bool PlaylistDocked { get; set; } = true;
+
+    public bool HasPlaylistWindowPosition { get; set; }
+
+    public float PlaylistWindowX { get; set; }
+
+    public float PlaylistWindowY { get; set; }
+
     public bool MainWindowShade { get; set; }
 
     public bool PlaylistWindowShade { get; set; }

@@ -12,6 +12,9 @@ public static class SkinButton
         ImGui.SetCursorScreenPos(pos);
         var clicked = ImGui.InvisibleButton($"##{id}", size);
         var active = ImGui.IsItemActive();
+        if (ImGui.IsItemHovered())
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
         if (!SkinRenderer.DrawSprite(skin, active ? activeSprite : normalSprite, pos, size))
             ImGui.GetWindowDrawList().AddRect(pos, pos + size, ImGui.GetColorU32(FallbackColor));
 

@@ -105,18 +105,13 @@ public sealed class AudioMetadataService
                         if (!option.TryGetProperty("Files", out var files) || files.ValueKind != JsonValueKind.Object)
                             continue;
 
-                        // Find the first .scd value in the Files dictionary.
-                        foreach (var file in files.EnumerateObject())
+                        var scdPath = LargestExistingScdPath(modPath, files);
+                        if (!string.IsNullOrWhiteSpace(scdPath))
                         {
-                            var value = file.Value.GetString();
-                            if (value is not null && value.EndsWith(".scd", StringComparison.OrdinalIgnoreCase))
-                            {
-                                if (!string.IsNullOrWhiteSpace(groupName))
-                                    this.cachedOptionToScd[EntryKey(groupName, name)] = value;
+                            if (!string.IsNullOrWhiteSpace(groupName))
+                                this.cachedOptionToScd[EntryKey(groupName, name)] = scdPath;
 
-                                this.cachedOptionToScd[name] = value;
-                                break;
-                            }
+                            this.cachedOptionToScd[name] = scdPath;
                         }
                     }
                 }
@@ -132,6 +127,41 @@ public sealed class AudioMetadataService
         }
 
         return this.cachedOptionToScd;
+    }
+
+    private static string? LargestExistingScdPath(string modPath, JsonElement files)
+    {
+        string? firstScdPath = null;
+        string? largestScdPath = null;
+        long largestScdSize = -1;
+
+        foreach (var file in files.EnumerateObject())
+        {
+            var value = file.Value.GetString();
+            if (value is null || !value.EndsWith(".scd", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            firstScdPath ??= value;
+            var fullPath = Path.Combine(modPath, value.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(fullPath))
+                continue;
+
+            try
+            {
+                var size = new FileInfo(fullPath).Length;
+                if (size > largestScdSize)
+                {
+                    largestScdSize = size;
+                    largestScdPath = value;
+                }
+            }
+            catch
+            {
+                // Ignore inaccessible files and keep looking for another usable SCD.
+            }
+        }
+
+        return largestScdPath ?? firstScdPath;
     }
 
     private static string EntryKey(string optionGroup, string optionName)
