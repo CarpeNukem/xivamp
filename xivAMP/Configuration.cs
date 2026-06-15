@@ -9,6 +9,8 @@ public sealed class Configuration : IPluginConfiguration
 
     public string SelectedModDirectory { get; set; } = string.Empty;
 
+    public string SelectedAnimationModDirectory { get; set; } = string.Empty;
+
     public string SelectedOptionGroup { get; set; } = string.Empty;
 
     public bool UseTemporarySettings { get; set; } = true;

@@ -241,6 +241,28 @@ public sealed class PenumbraService : IDisposable
         }
     }
 
+    public Result EnableTemporaryMod(int objectIndex, string modDirectory)
+    {
+        if (!this.IsAvailable)
+            return Result.Fail("Penumbra is not available.");
+
+        if (string.IsNullOrWhiteSpace(modDirectory))
+            return Result.Ok();
+
+        try
+        {
+            var code = this.ApplyTemporarySettings(objectIndex, modDirectory, null, null);
+            return IsSuccess(code)
+                ? Result.Ok()
+                : Result.Fail($"Penumbra rejected the animation mod temporary setting: {code}");
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Could not temporarily enable animation mod {ModDirectory}.", modDirectory);
+            return Result.Fail($"Could not prepare animation mod: {ex.Message}");
+        }
+    }
+
     public Result ClearTemporaryPlayerSettings(int objectIndex, bool redraw)
     {
         if (!this.IsAvailable || this.removeAllTemporaryModSettingsPlayer is null)
@@ -265,30 +287,42 @@ public sealed class PenumbraService : IDisposable
     }
 
     private PenumbraApiEc ApplyTemporary(int objectIndex, string modDirectory, string optionGroup, string optionName)
+        => this.ApplyTemporarySettings(objectIndex, modDirectory, optionGroup, optionName);
+
+    private PenumbraApiEc ApplyTemporarySettings(int objectIndex, string modDirectory, string? optionGroup, string? optionName)
     {
         if (this.getCollectionForObject is null || this.getCurrentModSettingsWithTemp is null || this.setTemporaryModSettingsPlayer is null)
-            return PenumbraApiEc.NothingChanged;
+            return PenumbraApiEc.InvalidArgument;
 
-        var (valid, objectValid, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
-        if (!valid || !objectValid)
+        var (valid, _, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
+        // The second boolean only says whether the object's identifier has a direct
+        // collection assignment. It can be false while Penumbra still returns the valid
+        // effective collection inherited from Yourself or Default.
+        if (!valid)
             return PenumbraApiEc.CollectionMissing;
 
         var (resultCode, currentSettings) = this.getCurrentModSettingsWithTemp.Invoke(collectionId, modDirectory, string.Empty, false, false, TemporaryKey);
-        if (!IsSuccess(resultCode) || currentSettings is not { } settings)
+        if (!IsSuccess(resultCode))
             return resultCode;
+        if (currentSettings is not { } settings)
+            return PenumbraApiEc.ModMissing;
 
-        var (enabled, priority, settingsDict, _, _) = settings;
+        var (_, priority, settingsDict, _, _) = settings;
         var merged = settingsDict.ToDictionary(
             pair => pair.Key,
             pair => (IReadOnlyList<string>)pair.Value.ToList(),
             StringComparer.OrdinalIgnoreCase);
-        merged[optionGroup] = [optionName];
+        if (!string.IsNullOrWhiteSpace(optionGroup) && !string.IsNullOrWhiteSpace(optionName))
+            merged[optionGroup] = [optionName];
 
+        // Play must work even when the mod is disabled in the player's persistent
+        // collection. This temporary override is removed when xivAMP releases control,
+        // so enabling it here does not permanently alter the user's Penumbra settings.
         return this.setTemporaryModSettingsPlayer.Invoke(
             objectIndex,
             modDirectory,
             false,
-            enabled,
+            true,
             priority,
             merged,
             TemporarySource,
@@ -301,8 +335,8 @@ public sealed class PenumbraService : IDisposable
         if (this.getCollectionForObject is null || this.trySetModSetting is null)
             return PenumbraApiEc.NothingChanged;
 
-        var (valid, objectValid, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
-        if (!valid || !objectValid)
+        var (valid, _, (collectionId, _)) = this.getCollectionForObject.Invoke(objectIndex);
+        if (!valid)
             return PenumbraApiEc.CollectionMissing;
 
         return this.trySetModSetting.Invoke(collectionId, modDirectory, optionGroup, optionName, string.Empty);

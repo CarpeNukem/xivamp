@@ -29,6 +29,8 @@ public sealed class XivAmpController
 
     public string Status { get; private set; } = "Ready";
 
+    public string PlaybackStatus { get; private set; } = string.Empty;
+
     public IReadOnlyList<PenumbraMod> Mods
     {
         get
@@ -103,6 +105,16 @@ public sealed class XivAmpController
         this.plugin.Save();
         this.audioMetadata.InvalidateCache();
         this.ReloadGroups();
+    }
+
+    public void SelectAnimationMod(string directory)
+    {
+        this.emoteActive = false;
+        this.plugin.Configuration.SelectedAnimationModDirectory = directory;
+        this.plugin.Save();
+        this.Status = string.IsNullOrWhiteSpace(directory)
+            ? "Animation mod cleared."
+            : "Animation mod selected.";
     }
 
     public void SelectGroup(string group)
@@ -207,10 +219,15 @@ public sealed class XivAmpController
 
     public void ApplyCurrent()
     {
+        this.PlaybackStatus = "play clicked";
+        this.log.Information("Play clicked in xivAMP.");
+
         var entry = this.CurrentEntry();
         if (entry is null)
         {
             this.Status = "No playlist entry selected.";
+            this.PlaybackStatus = "play failed: no track selected";
+            this.log.Warning("xivAMP Play stopped: no playlist entry is selected.");
             return;
         }
 
@@ -218,13 +235,43 @@ public sealed class XivAmpController
         if (player is null)
         {
             this.Status = "Local player is not available.";
+            this.PlaybackStatus = "play failed: local player unavailable";
+            this.log.Warning("xivAMP Play stopped: local player is unavailable.");
             return;
         }
+
+        this.log.Information(
+            "xivAMP Play starting: audio mod {AudioMod}, group {OptionGroup}, option {OptionName}, animation mod {AnimationMod}, object {ObjectIndex}.",
+            this.plugin.Configuration.SelectedModDirectory,
+            entry.OptionGroup,
+            entry.OptionName,
+            this.AnimationModDirectory(),
+            player.ObjectIndex);
 
         // Populate metadata from SCD file if not yet loaded.
         this.audioMetadata.Populate(entry, this.plugin.Configuration.SelectedModDirectory, this.plugin.Penumbra);
         if (!this.ResetPreviousGroupIfNeeded(entry.OptionGroup))
+        {
+            this.PlaybackStatus = $"play failed: {this.Status}";
             return;
+        }
+
+        var animationMod = this.AnimationModDirectory();
+        var animationModError = string.Empty;
+        if (this.plugin.Configuration.UseTemporarySettings && !string.IsNullOrWhiteSpace(animationMod))
+        {
+            var animationResult = this.plugin.Penumbra.EnableTemporaryMod((int)player.ObjectIndex, animationMod);
+            if (!animationResult.Success)
+            {
+                animationModError = animationResult.Error;
+                this.log.Warning("xivAMP animation mod preparation failed: {Error}", animationModError);
+            }
+        }
+
+        // The vanilla emote is independent of the audio option change. Always attempt it
+        // after preparing the animation mod, even if Penumbra rejected that preparation,
+        // so Play still gives a visible in-game response and a useful error.
+        var emoteError = this.MaybeFireModEmote();
 
         var result = this.plugin.Penumbra.ApplyTrack(
             (int)player.ObjectIndex,
@@ -244,29 +291,41 @@ public sealed class XivAmpController
             this.plugin.Configuration.IsPaused = false;
             this.plugin.Configuration.IsStopped = false;
             this.plugin.Save();
-            this.MaybeFireModEmote();
-            this.Status = $"Applied {entry.Label}";
+            var warnings = new[] { animationModError, emoteError }
+                .Where(error => !string.IsNullOrWhiteSpace(error))
+                .ToArray();
+            this.Status = warnings.Length == 0
+                ? $"Applied {entry.Label}"
+                : $"Applied {entry.Label}; {string.Join("; ", warnings)}";
+            this.PlaybackStatus = warnings.Length == 0
+                ? $"playing: {entry.Label}"
+                : $"audio playing; animation warning";
+            this.log.Information("xivAMP Play completed: {Status}", this.Status);
             return;
         }
 
         this.Status = result.Error;
+        this.PlaybackStatus = string.IsNullOrWhiteSpace(emoteError)
+            ? $"audio failed: {result.Error}"
+            : $"audio failed; emote failed: {emoteError}";
+        this.log.Warning("xivAMP audio apply failed: {Error}", result.Error);
     }
 
     /// <summary>
     /// Fire the selected mod's "on play" emote once per playback session. Skipped if one is
     /// already considered active (so auto-advancing tracks doesn't restart the emote).
     /// </summary>
-    private void MaybeFireModEmote()
+    private string MaybeFireModEmote()
     {
         if (this.emoteActive)
-            return;
+            return string.Empty;
 
-        var modDir = this.plugin.Configuration.SelectedModDirectory;
+        var modDir = this.AnimationModDirectory();
         if (string.IsNullOrWhiteSpace(modDir)
             || !this.plugin.Configuration.ModEmoteSets.TryGetValue(modDir, out var emotes)
             || emotes is null
             || emotes.Count == 0)
-            return;
+            return string.Empty;
 
         // Don't restart if one of this mod's selected emotes is already playing (matched by
         // the live emote id, so idle/sit/doze don't count). Treat it as satisfied this session.
@@ -275,19 +334,28 @@ public sealed class XivAmpController
             && emotes.Any(emote => this.plugin.Emotes.IsPerformingEmote(player.Address, (ushort)emote.EmoteId)))
         {
             this.emoteActive = true;
-            return;
+            return string.Empty;
         }
 
         // A mod can have several selected emotes; pick one at random for this session.
         var trigger = emotes[this.random.Next(emotes.Count)];
         if (trigger.EmoteId == 0)
-            return;
+            return "The selected emote has no valid game id.";
 
         if (this.plugin.Emotes.TryExecute((ushort)trigger.EmoteId, out var error))
+        {
             this.emoteActive = true;
-        else
-            this.log.Warning("Did not play emote {Name}: {Error}", trigger.Name, error);
+            return string.Empty;
+        }
+
+        this.log.Warning("Did not play emote {Name}: {Error}", trigger.Name, error);
+        return error;
     }
+
+    private string AnimationModDirectory()
+        => string.IsNullOrWhiteSpace(this.plugin.Configuration.SelectedAnimationModDirectory)
+            ? this.plugin.Configuration.SelectedModDirectory
+            : this.plugin.Configuration.SelectedAnimationModDirectory;
 
     public void PauseCurrent()
     {
@@ -483,6 +551,7 @@ public sealed class XivAmpController
 
         preset.Name = name;
         preset.SelectedModDirectory = this.plugin.Configuration.SelectedModDirectory;
+        preset.SelectedAnimationModDirectory = this.plugin.Configuration.SelectedAnimationModDirectory;
         preset.CurrentIndex = this.plugin.Configuration.CurrentIndex;
         preset.Entries = this.CloneEntries(this.plugin.Configuration.Playlist);
 
@@ -506,6 +575,7 @@ public sealed class XivAmpController
         this.ResetActiveTrack("Stopped current playlist.", false);
         this.shuffleHistory.Clear();
         this.plugin.Configuration.SelectedModDirectory = preset.SelectedModDirectory;
+        this.plugin.Configuration.SelectedAnimationModDirectory = preset.SelectedAnimationModDirectory;
         this.plugin.Configuration.Playlist = this.CloneEntries(preset.Entries);
         this.plugin.Configuration.CurrentIndex = this.NormalizePresetIndex(preset.CurrentIndex);
         var firstPresetGroup = this.plugin.Configuration.Playlist

@@ -24,7 +24,8 @@ public sealed class SetupPopup : IDisposable
     private ContactLogo? discordLogo;
     private ContactLogo? nRootLogo;
     private bool contactLogosLoaded;
-    private string modFilter = string.Empty;
+    private string audioModFilter = string.Empty;
+    private string animationModFilter = string.Empty;
     private string selectedPresetName = string.Empty;
     private string presetNameBuffer = string.Empty;
     private string renamePresetBuffer = string.Empty;
@@ -88,7 +89,7 @@ public sealed class SetupPopup : IDisposable
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Redraw character after applying a track.\nRequired for visual changes to appear.");
+            ImGui.SetTooltip("Redraw your character after applying a track.\nRequired for the replacement SCD to be requested and start playing.");
 
         // Extra time a track is held past its end before auto-advancing, so the next
         // track's Penumbra/Mare (or analog lol... no Mare except original Mare!.. I miss it :c..) sync lands without cutting this one short.
@@ -109,8 +110,10 @@ public sealed class SetupPopup : IDisposable
 
         this.DrawPresetControls(columnWidth);
         this.BeginSetupColumn();
-        this.Section("mod", columnWidth);
-        this.DrawModCombo(columnWidth);
+        this.Section("audio track mod", columnWidth);
+        this.DrawAudioModCombo(columnWidth);
+        this.Section("animation mod", columnWidth);
+        this.DrawAnimationModCombo(columnWidth);
         this.DrawChangedItems(columnWidth);
         this.DrawContacts(columnWidth);
     }
@@ -336,29 +339,68 @@ public sealed class SetupPopup : IDisposable
         => this.plugin.Configuration.SavedPlaylists.FirstOrDefault(preset =>
             string.Equals(preset.Name, this.selectedPresetName, StringComparison.OrdinalIgnoreCase));
 
-    private void DrawModCombo(float columnWidth)
+    private void DrawAudioModCombo(float columnWidth)
     {
         var selectedMod = this.controller.Mods.FirstOrDefault(mod => mod.Directory == this.plugin.Configuration.SelectedModDirectory);
-        var selectedLabel = string.IsNullOrWhiteSpace(selectedMod.Directory) ? "Choose Penumbra mod" : selectedMod.Label;
+        var selectedLabel = string.IsNullOrWhiteSpace(selectedMod.Directory) ? "Choose audio track mod" : selectedMod.Label;
         this.BeginSetupColumn();
         ImGui.SetNextItemWidth(columnWidth);
-        if (!ImGui.BeginCombo("##mod", selectedLabel))
+        if (!ImGui.BeginCombo("##audio_mod", selectedLabel))
             return;
 
         ImGui.SetNextItemWidth(-1);
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();
 
-        ImGui.InputTextWithHint("##modfilter", "filter mods", ref this.modFilter, 128);
+        ImGui.InputTextWithHint("##audio_mod_filter", "filter mods", ref this.audioModFilter, 128);
         ImGui.Separator();
 
-        foreach (var mod in this.FilteredMods())
+        foreach (var mod in this.FilteredMods(this.audioModFilter))
         {
             var selected = mod.Directory == this.plugin.Configuration.SelectedModDirectory;
             if (ImGui.Selectable(mod.Label, selected))
             {
-                this.modFilter = string.Empty;
+                this.audioModFilter = string.Empty;
                 this.controller.SelectMod(mod.Directory);
+            }
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawAnimationModCombo(float columnWidth)
+    {
+        var selectedDirectory = this.plugin.Configuration.SelectedAnimationModDirectory;
+        var selectedMod = this.controller.Mods.FirstOrDefault(mod => mod.Directory == selectedDirectory);
+        var selectedLabel = string.IsNullOrWhiteSpace(selectedDirectory)
+            ? "(use audio mod)"
+            : selectedMod.Label;
+
+        this.BeginSetupColumn();
+        ImGui.SetNextItemWidth(columnWidth);
+        if (!ImGui.BeginCombo("##animation_mod", selectedLabel))
+            return;
+
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.IsWindowAppearing())
+            ImGui.SetKeyboardFocusHere();
+
+        ImGui.InputTextWithHint("##animation_mod_filter", "filter mods", ref this.animationModFilter, 128);
+        ImGui.Separator();
+
+        if (ImGui.Selectable("(use audio mod)", string.IsNullOrWhiteSpace(selectedDirectory)))
+            this.controller.SelectAnimationMod(string.Empty);
+
+        foreach (var mod in this.FilteredMods(this.animationModFilter))
+        {
+            var selected = mod.Directory == selectedDirectory;
+            if (ImGui.Selectable(mod.Label, selected))
+            {
+                this.animationModFilter = string.Empty;
+                this.controller.SelectAnimationMod(mod.Directory);
             }
 
             if (selected)
@@ -372,7 +414,9 @@ public sealed class SetupPopup : IDisposable
     {
         // Refresh the cached list only when the selected mod changes (the IPC call is not
         // free, so we don't run it every frame).
-        var modDir = this.plugin.Configuration.SelectedModDirectory;
+        var modDir = string.IsNullOrWhiteSpace(this.plugin.Configuration.SelectedAnimationModDirectory)
+            ? this.plugin.Configuration.SelectedModDirectory
+            : this.plugin.Configuration.SelectedAnimationModDirectory;
         if (!string.Equals(modDir, this.changedItemsModDir, StringComparison.Ordinal))
         {
             this.changedItemsModDir = modDir;
@@ -399,7 +443,7 @@ public sealed class SetupPopup : IDisposable
             return;
         }
 
-        var modDirKey = this.plugin.Configuration.SelectedModDirectory;
+        var modDirKey = modDir;
         var emoteItems = this.changedItems.Where(item => item.IsEmote).ToList();
 
         this.BeginSetupColumn();
@@ -565,14 +609,14 @@ public sealed class SetupPopup : IDisposable
         return new ContactLogo(texture, new Vector2(image.Width, image.Height));
     }
 
-    private IEnumerable<PenumbraMod> FilteredMods()
+    private IEnumerable<PenumbraMod> FilteredMods(string filter)
     {
-        if (string.IsNullOrWhiteSpace(this.modFilter))
+        if (string.IsNullOrWhiteSpace(filter))
             return this.controller.Mods;
 
         return this.controller.Mods.Where(mod =>
-            mod.Directory.Contains(this.modFilter, StringComparison.OrdinalIgnoreCase)
-            || mod.Name.Contains(this.modFilter, StringComparison.OrdinalIgnoreCase));
+            mod.Directory.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || mod.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
     }
 
     private void OnSkinSelected(bool success, string path)

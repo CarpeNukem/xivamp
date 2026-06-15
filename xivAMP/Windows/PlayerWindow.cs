@@ -295,7 +295,9 @@ public sealed class PlayerWindow : Window
     private void DrawMainText(Vector2 origin, float scale)
     {
         var current = this.controller.AppliedEntry() ?? this.controller.CurrentEntry();
-        var title = current?.Label ?? "no track loaded";
+        var title = string.IsNullOrWhiteSpace(this.controller.PlaybackStatus)
+            ? current?.Label ?? "no track loaded"
+            : this.controller.PlaybackStatus;
         if (!SkinTextRenderer.DrawScrollingText(this.plugin.CurrentSkin, title, origin + new Vector2(111, 27) * scale, 154 * scale, scale, ref this.scrollOffset))
             DrawDisplayText(origin + new Vector2(111, 24) * scale, new Vector2(154, 15) * scale, title);
 
@@ -748,10 +750,6 @@ public sealed class PlayerWindow : Window
             this.autoAdvancedOptionName = string.Empty;
             return;
         }
-
-        // Past the track end + gap: advance, unless repeat is on (let the SCD loop).
-        if (this.plugin.Configuration.RepeatEnabled)
-            return;
 
         var currentOption = PlaylistFormat.EntryKey(
             this.plugin.Configuration.LastAppliedOptionGroup,

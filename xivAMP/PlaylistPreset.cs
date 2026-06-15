@@ -7,6 +7,8 @@ public sealed class PlaylistPreset
 
     public string SelectedModDirectory { get; set; } = string.Empty;
 
+    public string SelectedAnimationModDirectory { get; set; } = string.Empty;
+
     public int CurrentIndex { get; set; } = -1;
 
     public List<PlaylistEntry> Entries { get; set; } = [];
