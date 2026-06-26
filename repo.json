@@ -10,6 +10,7 @@
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/CarpeNukem/xivamp",
     "DalamudApiLevel": 15,
+    "TestingDalamudApiLevel": 15,
     "LoadPriority": 0,
     "IconUrl": "https://raw.githubusercontent.com/CarpeNukem/xivamp/main/xivAMP/xivamp.png",
     "Tags": [
