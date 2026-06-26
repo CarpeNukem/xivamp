@@ -4,7 +4,7 @@
     "Name": "xivAMP",
     "InternalName": "xivAMP",
     "AssemblyVersion": "0.9.1.0",
-    "TestingAssemblyVersion": "0.9.1.0",
+    "TestingAssemblyVersion": "0.9.9.0",
     "Punchline": "Winamp-inspired Penumbra playlist switching for syncshell DJing.",
     "Description": "Plan and perform Penumbra music-option playlists with Winamp-style controls - skinnable .wsz UI, playlist, window-shade modes and spectrum analyzer. Use /xivamp to open the player.",
     "ApplicableVersion": "any",

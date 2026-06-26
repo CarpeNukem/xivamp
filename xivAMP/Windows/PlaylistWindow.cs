@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Globalization;
 using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -13,6 +12,7 @@ public sealed class PlaylistWindow : Window
     private static readonly Vector2 MinSize = new(275, 232);
     private static readonly Vector2 RemovePopupSize = new(320, 110);
     private static readonly Vector2 ClearPopupSize = new(270, 105);
+    private static readonly Vector2 TrackPropertiesPopupMinSize = new(455, 170);
     private const float WidthStep = 25;
     private const float HeightStep = 29;
     private const float ShadeHeight = 14;
@@ -21,9 +21,6 @@ public sealed class PlaylistWindow : Window
     private readonly Plugin plugin;
     private readonly XivAmpController controller;
     private string renameBuffer = string.Empty;
-    private string durationBuffer = string.Empty;
-    private string bitrateBuffer = string.Empty;
-    private string khzBuffer = string.Empty;
     private string propertiesError = string.Empty;
     private string addFilter = string.Empty;
     private string addGroupFilter = string.Empty;
@@ -591,7 +588,7 @@ public sealed class PlaylistWindow : Window
             this.controller.SetStatus("MISC is visual-only for now.");
 
         if (this.BottomButton("list_opts", origin + new Vector2(baseSize.X - 45, buttonY) * scale, new Vector2(25, 18) * scale))
-            this.plugin.SetupPopupRequested = true;
+            this.plugin.OpenSettingsWindow();
 
         // Mini transport controls baked into the bottom-right corner. Webamp layout:
         // action buttons at top:22, left:3 within the 150px corner, 10x10 each.
@@ -1232,11 +1229,15 @@ public sealed class PlaylistWindow : Window
 
     private void StartRenaming(int index, PlaylistEntry entry)
     {
+        if (Math.Abs(this.plugin.Configuration.TrackPropertiesPopupHeight - 260) < 0.5f
+            || Math.Abs(this.plugin.Configuration.TrackPropertiesPopupHeight - 220) < 0.5f)
+        {
+            this.plugin.Configuration.TrackPropertiesPopupHeight = TrackPropertiesPopupMinSize.Y;
+            this.plugin.Save();
+        }
+
         this.renameIndex = index;
         this.renameBuffer = entry.DisplayName;
-        this.durationBuffer = FormatDurationForEdit(entry);
-        this.bitrateBuffer = entry.BitrateKbps > 0 ? entry.BitrateKbps.ToString(CultureInfo.InvariantCulture) : string.Empty;
-        this.khzBuffer = entry.SampleRate > 0 ? (entry.SampleRate / 1000.0).ToString("0.###", CultureInfo.InvariantCulture) : string.Empty;
         this.propertiesError = string.Empty;
         ImGui.OpenPopup("rename");
     }
@@ -1247,7 +1248,7 @@ public sealed class PlaylistWindow : Window
                 this.plugin.CurrentSkin,
                 "rename",
                 new Vector2(this.plugin.Configuration.TrackPropertiesPopupWidth, this.plugin.Configuration.TrackPropertiesPopupHeight),
-                new Vector2(455, 260),
+                TrackPropertiesPopupMinSize,
                 true,
                 size =>
                 {
@@ -1264,11 +1265,24 @@ public sealed class PlaylistWindow : Window
         }
 
         SkinnedPanel.Title(this.plugin.CurrentSkin, "track properties");
-        var contentWidth = MathF.Max(260, SkinnedPanel.ContentWidth(this.plugin.CurrentSkin));
-        var fieldOffset = 50.0f;
-        var fieldWidth = MathF.Max(150, contentWidth - fieldOffset);
+        var windowPos = ImGui.GetWindowPos();
+        var bodyLeft = SkinnedPanel.ContentCursorScreenPosition(this.plugin.CurrentSkin).X;
+        var bodyRight = windowPos.X + ImGui.GetWindowSize().X - 24;
+        var labelX = bodyLeft + 16;
+        var valueX = bodyLeft + 104;
+        var valueWidth = MathF.Max(170, bodyRight - valueX);
+        var titleY = windowPos.Y + 31;
+        var rowY = titleY + 25;
+        const float rowStep = 24;
 
-        // ── Header ──
+        void BeginLabelRow(float y, string label)
+        {
+            ImGui.SetCursorScreenPos(new Vector2(labelX, y + 3));
+            ImGui.TextDisabled(label);
+            ImGui.SetCursorScreenPos(new Vector2(valueX, y));
+        }
+
+        ImGui.SetCursorScreenPos(new Vector2(labelX, titleY));
         ImGui.TextUnformatted(entry.OptionName);
         if (!string.IsNullOrWhiteSpace(entry.OptionGroup))
         {
@@ -1276,52 +1290,35 @@ public sealed class PlaylistWindow : Window
             ImGui.TextDisabled($"[{entry.OptionGroup}]");
         }
 
-        ImGui.Separator();
-
-        // ── Metadata fields ──
-        ImGui.TextDisabled("name");
-        ImGui.SameLine(fieldOffset);
-        ImGui.SetNextItemWidth(fieldWidth);
+        BeginLabelRow(rowY, "name");
+        ImGui.SetNextItemWidth(valueWidth);
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();
 
         var save = ImGui.InputTextWithHint("##rename", "custom display name", ref this.renameBuffer, 96, ImGuiInputTextFlags.EnterReturnsTrue);
 
-        ImGui.TextDisabled("length");
-        ImGui.SameLine(fieldOffset);
-        ImGui.SetNextItemWidth(80);
-        save |= ImGui.InputTextWithHint("##duration", "mm:ss", ref this.durationBuffer, 32, ImGuiInputTextFlags.EnterReturnsTrue);
-        ImGui.SameLine();
-        ImGui.TextDisabled("mm:ss or seconds");
+        BeginLabelRow(rowY + rowStep, "track vfx");
+        this.DrawTrackVisualSetCombo(entry, valueWidth);
 
-        ImGui.TextDisabled("kbps");
-        ImGui.SameLine(fieldOffset);
-        ImGui.SetNextItemWidth(80);
-        save |= ImGui.InputTextWithHint("##kbps", "192", ref this.bitrateBuffer, 16, ImGuiInputTextFlags.EnterReturnsTrue);
+        BeginLabelRow(rowY + rowStep * 2, "audio");
+        ImGui.TextUnformatted(TrackMetadataLabel(entry));
+        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(entry.ScdPath))
+            ImGui.SetTooltip(entry.ScdPath);
 
-        ImGui.SameLine();
-        ImGui.Dummy(new Vector2(12, 0));
-        ImGui.SameLine();
-        ImGui.TextDisabled("kHz");
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(60);
-        save |= ImGui.InputTextWithHint("##khz", "44", ref this.khzBuffer, 16, ImGuiInputTextFlags.EnterReturnsTrue);
-
-        // ── Status line ──
         if (!string.IsNullOrWhiteSpace(this.propertiesError))
         {
+            ImGui.SetCursorScreenPos(new Vector2(labelX, rowY + rowStep * 3));
             var isError = this.propertiesError.StartsWith("No SCD", StringComparison.Ordinal)
-                || this.propertiesError.StartsWith("SCD found but", StringComparison.Ordinal)
-                || this.propertiesError.StartsWith("Invalid", StringComparison.Ordinal);
+                || this.propertiesError.StartsWith("SCD found but", StringComparison.Ordinal);
             var color = isError
                 ? new Vector4(1.0f, 0.4f, 0.3f, 1.0f)
                 : new Vector4(0.4f, 1.0f, 0.5f, 1.0f);
             ImGui.TextColored(color, this.propertiesError);
         }
 
-        ImGui.Dummy(new Vector2(0, 2));
-
-        // ── Primary actions ──
+        const float buttonGap = 5;
+        var buttonsWidth = 64 + 72 + 68 + 72 + 92 + buttonGap * 4;
+        SkinnedPanel.BottomButtonRow(this.plugin.CurrentSkin, buttonsWidth);
         if (save || SkinnedPanel.Button(this.plugin.CurrentSkin, "##save_track_props", "SAVE", new Vector2(64, 15)))
         {
             if (this.TrySaveProperties(entry))
@@ -1332,55 +1329,28 @@ public sealed class PlaylistWindow : Window
         if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##cancel_track_props", "CANCEL", new Vector2(72, 15)))
             ImGui.CloseCurrentPopup();
 
-        ImGui.Dummy(new Vector2(0, 2));
-
-        // ── Secondary actions ──
-        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##scan_track_meta", "SCAN", new Vector2(52, 15)))
-        {
-            entry.DurationSeconds = 0;
-            entry.SampleRate = 0;
-            entry.BitrateKbps = 0;
-            entry.ScdPath = string.Empty;
-            this.controller.AudioMetadata.InvalidateCache();
-            this.controller.AudioMetadata.Populate(entry, this.plugin.Configuration.SelectedModDirectory, this.plugin.Penumbra);
-            this.plugin.Save();
-            if (entry.DurationSeconds > 0)
-            {
-                this.durationBuffer = FormatDurationForEdit(entry);
-                this.bitrateBuffer = entry.BitrateKbps > 0 ? entry.BitrateKbps.ToString(CultureInfo.InvariantCulture) : string.Empty;
-                this.khzBuffer = entry.SampleRate > 0 ? (entry.SampleRate / 1000.0).ToString("0.###", CultureInfo.InvariantCulture) : string.Empty;
-                this.propertiesError = $"Found: {FormatDuration(entry.DurationSeconds)}, {entry.BitrateKbps}kbps, {entry.SampleRate / 1000.0:0.#}kHz";
-            }
-            else
-            {
-                this.propertiesError = string.IsNullOrWhiteSpace(entry.ScdPath)
-                    ? "No SCD file found in mod directory."
-                    : $"SCD found but could not read metadata: {Path.GetFileName(entry.ScdPath)}";
-            }
-        }
+        SkinnedPanel.SameRow();
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##scan_track_meta", "RESCAN", new Vector2(68, 15)))
+            this.RescanTrackMetadata(entry);
 
         if (ImGui.IsItemHovered())
         {
-            var tip = "Scan for SCD file and extract metadata.";
+            var tip = "Rescan SCD metadata.";
             if (!string.IsNullOrWhiteSpace(entry.ScdPath))
                 tip += $"\nCurrent: {Path.GetFileName(entry.ScdPath)}";
             ImGui.SetTooltip(tip);
         }
 
         SkinnedPanel.SameRow();
-        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##clear_track_meta", "CLEAR META", new Vector2(92, 15)))
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##remove_track_props", "REMOVE", new Vector2(72, 15)))
         {
-            entry.Duration = string.Empty;
-            entry.DurationSeconds = 0;
-            entry.BitrateKbps = 0;
-            entry.SampleRate = 0;
-            entry.ScdPath = string.Empty;
-            this.durationBuffer = string.Empty;
-            this.bitrateBuffer = string.Empty;
-            this.khzBuffer = string.Empty;
-            this.propertiesError = string.Empty;
-            this.plugin.Save();
+            this.controller.RemovePlaylistEntry(index);
+            this.renameIndex = -1;
+            ImGui.CloseCurrentPopup();
         }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Remove from playlist.");
 
         SkinnedPanel.SameRow();
         if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##clear_track_name", "CLEAR NAME", new Vector2(92, 15)))
@@ -1393,54 +1363,83 @@ public sealed class PlaylistWindow : Window
         SkinnedPanel.EndPopup(this.plugin.CurrentSkin);
     }
 
+    private void DrawTrackVisualSetCombo(PlaylistEntry entry, float width)
+    {
+        ImGui.SetNextItemWidth(width);
+        var label = this.controller.VisualSetLabel(entry.VisualSetName);
+        if (!ImGui.BeginCombo("##track_visual_set", label))
+            return;
+
+        if (ImGui.Selectable("PLAYLIST DEFAULT", string.IsNullOrWhiteSpace(entry.VisualSetName)))
+        {
+            entry.VisualSetName = string.Empty;
+            this.plugin.Save();
+        }
+
+        if (ImGui.Selectable("VFX OFF (defaults)", XivAmpController.IsVisualSetDisabled(entry.VisualSetName)))
+        {
+            entry.VisualSetName = VisualSet.DisabledName;
+            this.plugin.Save();
+        }
+
+        ImGui.Separator();
+        foreach (var set in this.controller.VisualSetsForMod(this.controller.EmoteSourceModDirectory))
+        {
+            var selected = string.Equals(entry.VisualSetName, set.Name, StringComparison.OrdinalIgnoreCase);
+            if (ImGui.Selectable(set.Name, selected))
+            {
+                entry.VisualSetName = set.Name;
+                this.plugin.Save();
+            }
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
     private bool TrySaveProperties(PlaylistEntry entry)
     {
         this.propertiesError = string.Empty;
-
-        var durationText = this.durationBuffer.Trim();
-        var bitrateText = this.bitrateBuffer.Trim();
-        var khzText = this.khzBuffer.Trim();
-
-        var durationSeconds = 0.0;
-        if (!string.IsNullOrWhiteSpace(durationText) && !TryParseDuration(durationText, out durationSeconds))
-        {
-            this.propertiesError = "Invalid length. Use mm:ss, hh:mm:ss, or seconds.";
-            return false;
-        }
-
-        var bitrate = 0;
-        if (!string.IsNullOrWhiteSpace(bitrateText)
-            && (!int.TryParse(bitrateText, NumberStyles.Integer, CultureInfo.InvariantCulture, out bitrate) || bitrate <= 0))
-        {
-            this.propertiesError = "Invalid kbps.";
-            return false;
-        }
-
-        var sampleRate = 0;
-        if (!string.IsNullOrWhiteSpace(khzText))
-        {
-            if (!double.TryParse(khzText, NumberStyles.Float, CultureInfo.InvariantCulture, out var khz) || khz <= 0)
-            {
-                this.propertiesError = "Invalid kHz.";
-                return false;
-            }
-
-            sampleRate = (int)Math.Round(khz * 1000);
-        }
-
         entry.DisplayName = this.renameBuffer.Trim();
-        entry.DurationSeconds = durationSeconds;
-        entry.Duration = durationSeconds > 0 ? FormatDuration(durationSeconds) : string.Empty;
-        entry.BitrateKbps = bitrate;
-        entry.SampleRate = sampleRate;
-        if (durationSeconds == 0 && bitrate == 0 && sampleRate == 0)
-            entry.ScdPath = string.Empty;
-
-        this.durationBuffer = entry.Duration;
-        this.bitrateBuffer = entry.BitrateKbps > 0 ? entry.BitrateKbps.ToString(CultureInfo.InvariantCulture) : string.Empty;
-        this.khzBuffer = entry.SampleRate > 0 ? (entry.SampleRate / 1000.0).ToString("0.###", CultureInfo.InvariantCulture) : string.Empty;
         this.plugin.Save();
         return true;
+    }
+
+    private void RescanTrackMetadata(PlaylistEntry entry)
+    {
+        entry.Duration = string.Empty;
+        entry.DurationSeconds = 0;
+        entry.BitrateKbps = 0;
+        entry.SampleRate = 0;
+        entry.ScdPath = string.Empty;
+        this.controller.AudioMetadata.InvalidateCache();
+        this.controller.AudioMetadata.Populate(entry, this.plugin.Configuration.SelectedModDirectory, this.plugin.Penumbra);
+        this.plugin.Save();
+
+        this.propertiesError = entry.DurationSeconds > 0
+            ? $"Found: {TrackMetadataLabel(entry)}"
+            : string.IsNullOrWhiteSpace(entry.ScdPath)
+                ? "No SCD file found in mod directory."
+                : $"SCD found but could not read metadata: {Path.GetFileName(entry.ScdPath)}";
+    }
+
+    private static string TrackMetadataLabel(PlaylistEntry entry)
+    {
+        var parts = new List<string>();
+        if (entry.DurationSeconds > 0)
+            parts.Add(FormatDuration(entry.DurationSeconds));
+        else if (!string.IsNullOrWhiteSpace(entry.Duration))
+            parts.Add(entry.Duration.Trim());
+
+        if (entry.BitrateKbps > 0)
+            parts.Add($"{entry.BitrateKbps}kbps");
+
+        if (entry.SampleRate > 0)
+            parts.Add($"{entry.SampleRate / 1000.0:0.#}kHz");
+
+        return parts.Count > 0 ? string.Join(", ", parts) : "not scanned";
     }
 
     private bool PlaylistUsesMultipleGroups()
@@ -1457,9 +1456,6 @@ public sealed class PlaylistWindow : Window
     private static bool IsInRect(Vector2 point, Vector2 min, Vector2 max)
         => point.X >= min.X && point.X <= max.X && point.Y >= min.Y && point.Y <= max.Y;
 
-    private static string FormatDurationForEdit(PlaylistEntry entry)
-        => entry.DurationSeconds > 0 ? FormatDuration(entry.DurationSeconds) : entry.Duration;
-
     private static string DurationLabel(PlaylistEntry entry)
         => entry.DurationSeconds > 0
             ? FormatDuration(entry.DurationSeconds)
@@ -1467,9 +1463,6 @@ public sealed class PlaylistWindow : Window
 
     private static string FormatDuration(double seconds)
         => PlaylistFormat.FormatDuration(seconds);
-
-    private static bool TryParseDuration(string value, out double seconds)
-        => PlaylistFormat.TryParseDuration(value, out seconds);
 
     private void DrawChrome(Vector2 origin, Vector2 size, float scale)
     {

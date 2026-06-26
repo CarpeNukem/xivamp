@@ -49,6 +49,49 @@ public sealed class XivAmpController
 
     public AudioMetadataService AudioMetadata => this.audioMetadata;
 
+    public static bool IsVisualSetDisabled(string name)
+        => string.Equals(name, VisualSet.DisabledName, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The mod whose emotes/animations are used. In "dual mod setup" this is the separate
+    /// animation mod; otherwise it's the music mod. Falls back to the music mod when dual
+    /// mode is on but no animation mod has been chosen yet.
+    /// </summary>
+    public string EmoteSourceModDirectory
+        => this.plugin.Configuration.DualSourceMode
+            && !string.IsNullOrWhiteSpace(this.plugin.Configuration.AnimationModDirectory)
+            ? this.plugin.Configuration.AnimationModDirectory
+            : this.plugin.Configuration.SelectedModDirectory;
+
+    /// <summary>
+    /// Select the animation-source mod (dual mod setup). Unlike <see cref="SelectMod"/>, this
+    /// only changes where emotes come from - it does not clear the playlist or selection.
+    /// </summary>
+    public void SelectAnimationMod(string directory)
+    {
+        if (string.Equals(this.plugin.Configuration.AnimationModDirectory, directory, StringComparison.Ordinal))
+            return;
+
+        var previousSource = this.EmoteSourceModDirectory;
+        // Allow the new animation's emote to fire on the next play.
+        this.emoteActive = false;
+        this.plugin.Configuration.AnimationModDirectory = directory;
+        this.ClearVisualSelectionIfSourceChanged(previousSource);
+        this.plugin.Save();
+    }
+
+    public void SetDualSourceMode(bool enabled)
+    {
+        if (this.plugin.Configuration.DualSourceMode == enabled)
+            return;
+
+        var previousSource = this.EmoteSourceModDirectory;
+        this.plugin.Configuration.DualSourceMode = enabled;
+        this.emoteActive = false;
+        this.ClearVisualSelectionIfSourceChanged(previousSource);
+        this.plugin.Save();
+    }
+
     public PlaylistEntry? CurrentEntry()
     {
         var index = this.plugin.Configuration.CurrentIndex;
@@ -73,7 +116,41 @@ public sealed class XivAmpController
     }
 
     public bool PresetExists(string name)
-        => this.FindPreset(name) is not null;
+        => this.plugin.PlaylistPresets.Exists(name, this.plugin.Configuration.SelectedModDirectory);
+
+    public VisualSet? FindVisualSet(string name)
+        => this.plugin.VisualSets.Find(name, this.EmoteSourceModDirectory);
+
+    public IEnumerable<VisualSet> VisualSetsForMod(string modDirectory)
+        => this.plugin.VisualSets.LoadForMod(modDirectory);
+
+    public string VisualSetLabel(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "PLAYLIST DEFAULT";
+
+        if (IsVisualSetDisabled(name))
+            return "VFX OFF";
+
+        return name;
+    }
+
+    public void DiscardPersistedPlaybackState()
+    {
+        if (string.IsNullOrWhiteSpace(this.plugin.Configuration.LastAppliedOptionName)
+            && string.IsNullOrWhiteSpace(this.plugin.Configuration.LastAppliedOptionGroup)
+            && this.plugin.Configuration.LastAppliedAtUtc == default
+            && this.plugin.Configuration.EstimatedSeekOffsetSeconds == 0
+            && !this.plugin.Configuration.IsPaused
+            && !this.plugin.Configuration.IsStopped)
+        {
+            return;
+        }
+
+        this.ClearAppliedState();
+        this.plugin.Configuration.IsStopped = false;
+        this.plugin.Save();
+    }
 
     public void ReloadPenumbraData()
     {
@@ -123,15 +200,30 @@ public sealed class XivAmpController
 
     public void SelectMod(string directory)
     {
+        var previousSource = this.EmoteSourceModDirectory;
         this.ResetActiveTrack("Reset previous mod option.", false);
         this.shuffleHistory.Clear();
         this.plugin.Configuration.SelectedModDirectory = directory;
         this.plugin.Configuration.SelectedOptionGroup = string.Empty;
         this.plugin.Configuration.Playlist.Clear();
         this.plugin.Configuration.CurrentIndex = -1;
+        this.ClearVisualSelectionIfSourceChanged(previousSource);
         this.plugin.Save();
         this.audioMetadata.InvalidateCache();
         this.ReloadGroups();
+    }
+
+    private void ClearVisualSelectionIfSourceChanged(string previousSource)
+    {
+        if (string.Equals(previousSource, this.EmoteSourceModDirectory, StringComparison.Ordinal))
+            return;
+
+        this.plugin.Configuration.DefaultVisualSetName = string.Empty;
+        foreach (var entry in this.plugin.Configuration.Playlist)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.VisualSetName) && !IsVisualSetDisabled(entry.VisualSetName))
+                entry.VisualSetName = string.Empty;
+        }
     }
 
     public void SelectGroup(string group)
@@ -195,8 +287,7 @@ public sealed class XivAmpController
                 {
                     this.Status = "End of playlist.";
                     this.shuffleHistory.Clear();
-                    this.plugin.Configuration.LastAppliedOptionGroup = string.Empty;
-                    this.plugin.Configuration.LastAppliedOptionName = string.Empty;
+                    this.ClearAppliedState();
                     this.plugin.Save();
                     return;
                 }
@@ -220,8 +311,7 @@ public sealed class XivAmpController
             if (!this.plugin.Configuration.RepeatEnabled && (raw < 0 || raw >= playlist.Count))
             {
                 this.Status = "End of playlist.";
-                this.plugin.Configuration.LastAppliedOptionGroup = string.Empty;
-                this.plugin.Configuration.LastAppliedOptionName = string.Empty;
+                this.ClearAppliedState();
                 this.plugin.Save();
                 return;
             }
@@ -255,16 +345,28 @@ public sealed class XivAmpController
         if (!this.ResetPreviousGroupIfNeeded(entry.OptionGroup))
             return;
 
+        var objectIndex = (int)player.ObjectIndex;
+        var visualWarning = this.ApplyResolvedVisualSet(objectIndex, entry);
         var result = this.plugin.Penumbra.ApplyTrack(
-            (int)player.ObjectIndex,
+            objectIndex,
             this.plugin.Configuration.SelectedModDirectory,
             entry.OptionGroup,
             entry.OptionName,
             this.plugin.Configuration.UseTemporarySettings,
-            this.plugin.Configuration.RedrawAfterApply);
+            false);
 
         if (result.Success)
         {
+            if (this.plugin.Configuration.RedrawAfterApply)
+            {
+                var redraw = this.plugin.Penumbra.RedrawPlayer(objectIndex);
+                if (!redraw.Success)
+                {
+                    this.Status = redraw.Error;
+                    return;
+                }
+            }
+
             this.shuffleHistory.Add(EntryKey(entry.OptionGroup, entry.OptionName));
             this.plugin.Configuration.LastAppliedOptionGroup = entry.OptionGroup;
             this.plugin.Configuration.LastAppliedOptionName = entry.OptionName;
@@ -273,39 +375,181 @@ public sealed class XivAmpController
             this.plugin.Configuration.IsPaused = false;
             this.plugin.Configuration.IsStopped = false;
             this.plugin.Save();
-            this.MaybeFireModEmote();
-            this.Status = $"Applied {entry.Label}";
+            this.MaybeFireModEmote(entry);
+            this.Status = string.IsNullOrWhiteSpace(visualWarning)
+                ? $"Applied {entry.Label}"
+                : $"Applied {entry.Label}; {visualWarning}";
             return;
         }
 
         this.Status = result.Error;
     }
 
-    /// <summary>
-    /// Fire the selected mod's "on play" emote once per playback session. Skipped if one is
-    /// already considered active (so auto-advancing tracks doesn't restart the emote).
-    /// </summary>
-    private void MaybeFireModEmote()
+    private string ApplyResolvedVisualSet(int objectIndex, PlaylistEntry entry)
     {
-        if (this.emoteActive)
+        var requestedName = this.RequestedVisualSetName(entry);
+        var set = this.ResolveVisualSet(entry, out var disabled);
+        if (disabled)
+            return this.ApplyVisualDefaults(objectIndex);
+
+        if (set is null)
+            return string.IsNullOrWhiteSpace(requestedName)
+                ? string.Empty
+                : $"visual set '{requestedName}' not found";
+
+        var modDir = VisualSetModDirectory(set);
+        if (string.IsNullOrWhiteSpace(modDir))
+            return $"visual set '{set.Name}' has no mod";
+
+        if (set.OptionSelections.Count == 0)
+            return $"visual set '{set.Name}' has no options";
+
+        var settings = this.plugin.Penumbra.GetAvailableSettings(modDir);
+        if (!settings.Success || settings.Value is null)
+            return $"visual set '{set.Name}': {settings.Error}";
+
+        var valid = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var invalid = 0;
+        foreach (var (group, option) in set.OptionSelections)
+        {
+            if (!settings.Value.TryGetValue(group, out var options)
+                || !options.Contains(option, StringComparer.OrdinalIgnoreCase))
+            {
+                invalid++;
+                continue;
+            }
+
+            valid[group] = option;
+        }
+
+        if (valid.Count == 0)
+            return $"visual set '{set.Name}' has no valid options";
+
+        var result = this.plugin.Penumbra.ApplyOptions(
+            objectIndex,
+            modDir,
+            valid,
+            temporary: true,
+            redraw: false,
+            label: $"visual set '{set.Name}'");
+        if (!result.Success)
+            return result.Error;
+
+        return invalid == 0
+            ? string.Empty
+            : $"visual set '{set.Name}' skipped {invalid} missing option{(invalid == 1 ? string.Empty : "s")}";
+    }
+
+    private string ApplyVisualDefaults(int objectIndex)
+    {
+        var clear = this.plugin.Penumbra.ClearTemporaryPlayerSettings(objectIndex, redraw: false);
+        if (!clear.Success)
+            return clear.Error;
+
+        var modDir = this.EmoteSourceModDirectory;
+        if (string.IsNullOrWhiteSpace(modDir))
+            return string.Empty;
+
+        var groups = this.VisualSetsForMod(modDir)
+            .SelectMany(set => set.OptionSelections.Keys)
+            .Where(group => !string.IsNullOrWhiteSpace(group))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (groups.Count == 0)
+            return string.Empty;
+
+        var settings = this.plugin.Penumbra.GetAvailableSettings(modDir);
+        if (!settings.Success || settings.Value is null)
+            return $"VFX OFF: {settings.Error}";
+
+        var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var missing = 0;
+        foreach (var group in groups)
+        {
+            if (!settings.Value.TryGetValue(group, out var options)
+                || options.Length == 0
+                || string.IsNullOrWhiteSpace(options[0]))
+            {
+                missing++;
+                continue;
+            }
+
+            defaults[group] = options[0];
+        }
+
+        if (defaults.Count == 0)
+            return missing == 0 ? string.Empty : "VFX OFF found no default options";
+
+        var result = this.plugin.Penumbra.ApplyOptions(
+            objectIndex,
+            modDir,
+            defaults,
+            temporary: true,
+            redraw: false,
+            label: "VFX OFF");
+        if (!result.Success)
+            return result.Error;
+
+        return missing == 0
+            ? string.Empty
+            : $"VFX OFF skipped {missing} missing default{(missing == 1 ? string.Empty : "s")}";
+    }
+
+    private VisualSet? ResolveVisualSet(PlaylistEntry entry, out bool disabled)
+    {
+        disabled = false;
+        var name = this.RequestedVisualSetName(entry);
+        if (IsVisualSetDisabled(name))
+        {
+            disabled = true;
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(name) ? null : this.FindVisualSet(name);
+    }
+
+    private string RequestedVisualSetName(PlaylistEntry entry)
+        => string.IsNullOrWhiteSpace(entry.VisualSetName)
+            ? this.plugin.Configuration.DefaultVisualSetName
+            : entry.VisualSetName;
+
+    /// <summary>
+    /// Fire the selected visual/fallback "on play" emote once per playback session.
+    /// Skipped if one is already considered active, so auto-advancing tracks does not
+    /// restart the emote.
+    /// </summary>
+    private void MaybeFireModEmote(PlaylistEntry entry)
+    {
+        var requestedName = this.RequestedVisualSetName(entry);
+        var set = this.ResolveVisualSet(entry, out var disabled);
+        if (!disabled && set is null && !string.IsNullOrWhiteSpace(requestedName))
             return;
 
-        var modDir = this.plugin.Configuration.SelectedModDirectory;
-        if (string.IsNullOrWhiteSpace(modDir)
-            || !this.plugin.Configuration.ModEmoteSets.TryGetValue(modDir, out var emotes)
-            || emotes is null
-            || emotes.Count == 0)
+        var modDir = disabled ? string.Empty : set is null ? this.EmoteSourceModDirectory : VisualSetModDirectory(set);
+        var emotes = set?.Emotes;
+        if ((emotes is null || emotes.Count == 0)
+            && !string.IsNullOrWhiteSpace(modDir)
+            && this.plugin.Configuration.ModEmoteSets.TryGetValue(modDir, out var fallback))
+        {
+            emotes = fallback;
+        }
+
+        if (string.IsNullOrWhiteSpace(modDir) || emotes is null || emotes.Count == 0)
             return;
 
         // Don't restart if one of this mod's selected emotes is already playing (matched by
         // the live emote id, so idle/sit/doze don't count). Treat it as satisfied this session.
         var player = this.objectTable.LocalPlayer;
-        if (player is not null
-            && emotes.Any(emote => this.plugin.Emotes.IsPerformingEmote(player.Address, (ushort)emote.EmoteId)))
+        var alreadyPerforming = player is not null
+            && emotes.Any(emote => this.plugin.Emotes.IsPerformingEmote(player.Address, (ushort)emote.EmoteId));
+        if (alreadyPerforming)
         {
             this.emoteActive = true;
             return;
         }
+
+        if (this.emoteActive)
+            this.emoteActive = false;
 
         // A mod can have several selected emotes; pick one at random for this session.
         var trigger = emotes[this.random.Next(emotes.Count)];
@@ -452,10 +696,7 @@ public sealed class XivAmpController
             this.plugin.Configuration.CurrentIndex = Math.Min(index, playlist.Count - 1);
 
         if (this.IsEntryIdentity(removed, this.plugin.Configuration.LastAppliedOptionGroup, this.plugin.Configuration.LastAppliedOptionName))
-        {
-            this.plugin.Configuration.LastAppliedOptionGroup = string.Empty;
-            this.plugin.Configuration.LastAppliedOptionName = string.Empty;
-        }
+            this.ClearAppliedState();
 
         this.plugin.Save();
         this.Status = $"Removed {removed.Label}.";
@@ -479,8 +720,7 @@ public sealed class XivAmpController
         if (!string.IsNullOrWhiteSpace(this.plugin.Configuration.LastAppliedOptionName)
             && !this.IsEntryIdentity(keep, this.plugin.Configuration.LastAppliedOptionGroup, this.plugin.Configuration.LastAppliedOptionName))
         {
-            this.plugin.Configuration.LastAppliedOptionGroup = string.Empty;
-            this.plugin.Configuration.LastAppliedOptionName = string.Empty;
+            this.ClearAppliedState();
         }
 
         playlist.Clear();
@@ -510,22 +750,27 @@ public sealed class XivAmpController
             return false;
         }
 
-        var preset = this.FindPreset(name);
-        if (preset is null)
-        {
-            preset = new PlaylistPreset();
-            this.plugin.Configuration.SavedPlaylists.Add(preset);
-        }
+        var preset = this.FindPreset(name) ?? new PlaylistPreset();
 
         preset.Name = name;
         preset.SelectedModDirectory = this.plugin.Configuration.SelectedModDirectory;
+        preset.DualSourceMode = this.plugin.Configuration.DualSourceMode;
+        preset.AnimationModDirectory = this.plugin.Configuration.AnimationModDirectory;
+        preset.DefaultVisualSetName = this.plugin.Configuration.DefaultVisualSetName;
         preset.CurrentIndex = this.plugin.Configuration.CurrentIndex;
         preset.Entries = this.CloneEntries(this.plugin.Configuration.Playlist);
 
-        this.plugin.Configuration.SavedPlaylists = this.plugin.Configuration.SavedPlaylists
-            .OrderBy(saved => saved.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        this.plugin.Save();
+        try
+        {
+            this.plugin.PlaylistPresets.Save(preset);
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Could not save playlist preset {Name}.", name);
+            this.Status = $"Could not save playlist '{name}': {ex.Message}";
+            return false;
+        }
+
         this.Status = $"Saved playlist '{name}' ({preset.Entries.Count} tracks).";
         return true;
     }
@@ -542,6 +787,9 @@ public sealed class XivAmpController
         this.ResetActiveTrack("Stopped current playlist.", false);
         this.shuffleHistory.Clear();
         this.plugin.Configuration.SelectedModDirectory = preset.SelectedModDirectory;
+        this.plugin.Configuration.DualSourceMode = preset.DualSourceMode;
+        this.plugin.Configuration.AnimationModDirectory = preset.AnimationModDirectory;
+        this.plugin.Configuration.DefaultVisualSetName = preset.DefaultVisualSetName;
         this.plugin.Configuration.Playlist = this.CloneEntries(preset.Entries);
         this.plugin.Configuration.CurrentIndex = this.NormalizePresetIndex(preset.CurrentIndex);
         var firstPresetGroup = this.plugin.Configuration.Playlist
@@ -571,8 +819,21 @@ public sealed class XivAmpController
             return false;
         }
 
-        this.plugin.Configuration.SavedPlaylists.Remove(preset);
-        this.plugin.Save();
+        try
+        {
+            if (!this.plugin.PlaylistPresets.Delete(name, this.plugin.Configuration.SelectedModDirectory))
+            {
+                this.Status = "Saved playlist no longer exists.";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Could not delete playlist preset {Name}.", name);
+            this.Status = $"Could not delete playlist '{name}': {ex.Message}";
+            return false;
+        }
+
         this.Status = $"Deleted playlist '{preset.Name}'.";
         return true;
     }
@@ -599,11 +860,21 @@ public sealed class XivAmpController
             return false;
         }
 
-        preset.Name = newName;
-        this.plugin.Configuration.SavedPlaylists = this.plugin.Configuration.SavedPlaylists
-            .OrderBy(saved => saved.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        this.plugin.Save();
+        try
+        {
+            if (!this.plugin.PlaylistPresets.Rename(oldName, newName, this.plugin.Configuration.SelectedModDirectory))
+            {
+                this.Status = "Saved playlist no longer exists.";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Could not rename playlist preset {OldName} to {NewName}.", oldName, newName);
+            this.Status = $"Could not rename playlist: {ex.Message}";
+            return false;
+        }
+
         this.Status = $"Renamed playlist to '{newName}'.";
         return true;
     }
@@ -658,13 +929,17 @@ public sealed class XivAmpController
         => this.Status = status;
 
     /// <summary>
-    /// Fully release control over the music mod: restore the default option for the
-    /// active group and clear all of xivAMP's temporary Penumbra settings.
+    /// Fully release control over xivAMP's mod settings. Active playback redraws to restore
+    /// the game state; stopped/paused/idle close only clears temporary ownership.
     /// Called when the UI closes or the plugin unloads.
     /// </summary>
     public void ReleaseControl()
     {
-        this.ResetActiveTrack("Stopped — released mod control.", true);
+        if (this.HasActivePlayback())
+            this.ResetActiveTrack("Stopped - released mod control.", true, this.plugin.Configuration.RedrawAfterApply);
+        else
+            this.ReleaseInactiveControl("Stopped - released mod control.");
+
         this.plugin.Save();
     }
 
@@ -701,7 +976,30 @@ public sealed class XivAmpController
         }
     }
 
-    private void ResetActiveTrack(string successStatus, bool clearTemporaryAfterDefault)
+    private bool HasActivePlayback()
+        => !this.plugin.Configuration.IsPaused
+            && !this.plugin.Configuration.IsStopped
+            && !string.IsNullOrWhiteSpace(this.plugin.Configuration.LastAppliedOptionName)
+            && this.plugin.Configuration.LastAppliedAtUtc != default;
+
+    private void ReleaseInactiveControl(string successStatus)
+    {
+        this.emoteActive = false;
+        this.ClearAppliedState();
+        this.plugin.Configuration.IsStopped = false;
+
+        var player = this.objectTable.LocalPlayer;
+        if (player is null)
+        {
+            this.Status = successStatus;
+            return;
+        }
+
+        var result = this.plugin.Penumbra.ClearTemporaryPlayerSettings((int)player.ObjectIndex, redraw: false);
+        this.Status = result.Success ? successStatus : result.Error;
+    }
+
+    private void ResetActiveTrack(string successStatus, bool clearTemporaryAfterDefault, bool redraw = true)
     {
         // Releasing/clearing playback - the emote may fire again on the next play.
         this.emoteActive = false;
@@ -725,13 +1023,24 @@ public sealed class XivAmpController
             && !string.IsNullOrWhiteSpace(previousGroup)
             && !string.IsNullOrWhiteSpace(defaultOption))
         {
+            if (!clearTemporaryAfterDefault)
+            {
+                var clear = this.plugin.Penumbra.ClearTemporaryPlayerSettings((int)player.ObjectIndex, redraw: false);
+                if (!clear.Success)
+                {
+                    this.Status = clear.Error;
+                    return;
+                }
+            }
+
+            var defaultRedraw = redraw && !clearTemporaryAfterDefault;
             var defaultResult = this.plugin.Penumbra.ApplyTrack(
                 (int)player.ObjectIndex,
                 previousMod,
                 previousGroup,
                 defaultOption,
                 this.plugin.Configuration.UseTemporarySettings,
-                this.plugin.Configuration.RedrawAfterApply);
+                defaultRedraw);
             if (!defaultResult.Success)
             {
                 this.Status = defaultResult.Error;
@@ -749,7 +1058,7 @@ public sealed class XivAmpController
 
         var result = this.plugin.Penumbra.ClearTemporaryPlayerSettings(
             (int)player.ObjectIndex,
-            this.plugin.Configuration.RedrawAfterApply);
+            redraw);
         this.Status = result.Success ? successStatus : result.Error;
     }
 
@@ -780,15 +1089,29 @@ public sealed class XivAmpController
         // Swap to the group's default/"off" option to silence the music. If no default
         // option can be resolved (e.g. the mod's option groups aren't loaded), fall back
         // to clearing xivAMP's temporary Penumbra settings so the music still stops.
-        var result = string.IsNullOrWhiteSpace(defaultOption)
-            ? this.plugin.Penumbra.ClearTemporaryPlayerSettings((int)player.ObjectIndex, this.plugin.Configuration.RedrawAfterApply)
-            : this.plugin.Penumbra.ApplyTrack(
+        Result result;
+        if (string.IsNullOrWhiteSpace(defaultOption))
+        {
+            result = this.plugin.Penumbra.ClearTemporaryPlayerSettings((int)player.ObjectIndex, this.plugin.Configuration.RedrawAfterApply);
+        }
+        else
+        {
+            var clear = this.plugin.Penumbra.ClearTemporaryPlayerSettings((int)player.ObjectIndex, redraw: false);
+            if (!clear.Success)
+            {
+                this.Status = clear.Error;
+                return;
+            }
+
+            result = this.plugin.Penumbra.ApplyTrack(
                 (int)player.ObjectIndex,
                 this.plugin.Configuration.SelectedModDirectory,
                 optionGroup,
                 defaultOption,
                 this.plugin.Configuration.UseTemporarySettings,
                 this.plugin.Configuration.RedrawAfterApply);
+        }
+
         if (!result.Success)
         {
             this.Status = result.Error;
@@ -859,6 +1182,7 @@ public sealed class XivAmpController
                     BitrateKbps = hasPrevious ? previous!.BitrateKbps : 0,
                     SampleRate = hasPrevious ? previous!.SampleRate : 0,
                     ScdPath = hasPrevious ? previous!.ScdPath : string.Empty,
+                    VisualSetName = hasPrevious ? previous!.VisualSetName : string.Empty,
                 };
             })
             .ToList();
@@ -894,7 +1218,7 @@ public sealed class XivAmpController
             previousGroup,
             defaultOption,
             this.plugin.Configuration.UseTemporarySettings,
-            this.plugin.Configuration.RedrawAfterApply);
+            false);
         if (reset.Success)
             return true;
 
@@ -926,8 +1250,7 @@ public sealed class XivAmpController
     }
 
     private PlaylistPreset? FindPreset(string name)
-        => this.plugin.Configuration.SavedPlaylists.FirstOrDefault(preset =>
-            string.Equals(preset.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
+        => this.plugin.PlaylistPresets.Find(name, this.plugin.Configuration.SelectedModDirectory);
 
     private List<PlaylistEntry> CloneEntries(IEnumerable<PlaylistEntry> entries)
         => entries.Select(CloneEntry).ToList();
@@ -943,6 +1266,7 @@ public sealed class XivAmpController
             SampleRate = entry.SampleRate,
             BitrateKbps = entry.BitrateKbps,
             ScdPath = entry.ScdPath,
+            VisualSetName = entry.VisualSetName,
         };
 
     private int NormalizePresetIndex(int index)
@@ -970,6 +1294,11 @@ public sealed class XivAmpController
 
         return missing;
     }
+
+    private string VisualSetModDirectory(VisualSet set)
+        => !string.IsNullOrWhiteSpace(set.ModDirectory)
+            ? set.ModDirectory
+            : this.EmoteSourceModDirectory;
 
     private bool IsEntryIdentity(PlaylistEntry entry, string optionGroup, string optionName)
         => PlaylistFormat.IsEntryIdentity(entry, optionGroup, optionName);

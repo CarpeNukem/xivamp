@@ -16,6 +16,7 @@ public sealed class SetupPopup : IDisposable
     private const float ButtonHeight = 15;
     private const float RowGap = 5;
     private const float SetupColumnTargetWidth = 310;
+    private const float VfxColumnTargetWidth = 460;
     private static readonly Vector2 PresetConfirmSize = new(330, 130);
 
     private readonly Plugin plugin;
@@ -25,6 +26,7 @@ public sealed class SetupPopup : IDisposable
     private ContactLogo? nRootLogo;
     private bool contactLogosLoaded;
     private string modFilter = string.Empty;
+    private string animationModFilter = string.Empty;
     private string selectedPresetName = string.Empty;
     private string presetNameBuffer = string.Empty;
     private string renamePresetBuffer = string.Empty;
@@ -32,6 +34,13 @@ public sealed class SetupPopup : IDisposable
     private string changedItemsModDir = string.Empty;
     private IReadOnlyList<ChangedItem> changedItems = Array.Empty<ChangedItem>();
     private string changedItemsError = string.Empty;
+    private string selectedVisualSetName = string.Empty;
+    private string visualSetNameBuffer = string.Empty;
+    private bool creatingVisualSet;
+    private bool focusVisualSetName;
+    private string visualGroupsModDir = string.Empty;
+    private IReadOnlyDictionary<string, string[]> visualGroups = new Dictionary<string, string[]>();
+    private string visualGroupsError = string.Empty;
 
     public SetupPopup(Plugin plugin, XivAmpController controller, FileDialogManager fileDialogManager)
     {
@@ -40,7 +49,7 @@ public sealed class SetupPopup : IDisposable
         this.fileDialogManager = fileDialogManager;
     }
 
-    public void Draw()
+    public void DrawSettings()
     {
         ImGui.Dummy(new Vector2(1, 10));
 
@@ -128,9 +137,44 @@ public sealed class SetupPopup : IDisposable
         this.DrawPresetControls(columnWidth);
         this.BeginSetupColumn();
         this.Section("mod", columnWidth);
+
+        var dual = this.plugin.Configuration.DualSourceMode;
+        this.BeginSetupColumn();
+        if (this.ToggleButton("DUAL MOD SETUP", dual, new Vector2(columnWidth, ButtonHeight)))
+        {
+            this.controller.SetDualSourceMode(!dual);
+            this.ResetVisualSetEditor();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Take music from one mod and animations from another.\nAdds a second mod selector for the animation source.");
+
+        if (dual)
+        {
+            this.BeginSetupColumn();
+            ImGui.TextDisabled("music mod");
+        }
+
         this.DrawModCombo(columnWidth);
+
+        if (dual)
+        {
+            this.BeginSetupColumn();
+            ImGui.TextDisabled("animation mod");
+            this.DrawAnimationModCombo(columnWidth);
+        }
+
+        this.DrawVfxSettings(columnWidth);
         this.DrawChangedItems(columnWidth);
         this.DrawContacts(columnWidth);
+    }
+
+    public void DrawVfxSets()
+    {
+        ImGui.Dummy(new Vector2(1, 10));
+
+        var columnWidth = this.BeginVfxColumn();
+        this.DrawVisualSetLibrary(columnWidth);
     }
 
     public void Dispose()
@@ -141,6 +185,26 @@ public sealed class SetupPopup : IDisposable
 
     private float BeginSetupColumn()
         => SkinnedPanel.CenterContentColumn(this.plugin.CurrentSkin, SetupColumnTargetWidth);
+
+    private float BeginVfxColumn()
+    {
+        var columnWidth = MathF.Min(VfxColumnTargetWidth, MathF.Max(1, ImGui.GetContentRegionAvail().X));
+        CenterCurrentContent(columnWidth);
+        return columnWidth;
+    }
+
+    private void BeginVfxColumn(float columnWidth)
+    {
+        var width = MathF.Min(columnWidth, MathF.Max(1, ImGui.GetContentRegionAvail().X));
+        CenterCurrentContent(width);
+    }
+
+    private static void CenterCurrentContent(float width)
+    {
+        var cursor = ImGui.GetCursorScreenPos();
+        var available = ImGui.GetContentRegionAvail().X;
+        ImGui.SetCursorScreenPos(new Vector2(cursor.X + MathF.Max(0, (available - width) * 0.5f), cursor.Y));
+    }
 
     private static void LinkText(string text, string url)
     {
@@ -164,16 +228,16 @@ public sealed class SetupPopup : IDisposable
 
     private void Section(string label, float columnWidth)
     {
-        this.BeginSetupColumn();
         SkinnedPanel.Section(this.plugin.CurrentSkin, label, columnWidth);
     }
 
     private void DrawPresetControls(float columnWidth)
     {
         this.Section("playlists", columnWidth);
-        this.EnsureSelectedPreset();
+        var presets = this.plugin.PlaylistPresets.LoadForMod(this.plugin.Configuration.SelectedModDirectory);
+        this.EnsureSelectedPreset(presets);
 
-        var selectedPreset = this.SelectedPreset();
+        var selectedPreset = this.SelectedPreset(presets);
         var comboLabel = selectedPreset is null
             ? "No saved playlists"
             : $"{selectedPreset.Name} ({selectedPreset.Entries.Count})";
@@ -185,7 +249,7 @@ public sealed class SetupPopup : IDisposable
         ImGui.SetNextItemWidth(presetFieldWidth);
         if (ImGui.BeginCombo("##preset", comboLabel))
         {
-            foreach (var preset in this.plugin.Configuration.SavedPlaylists.OrderBy(preset => preset.Name, StringComparer.OrdinalIgnoreCase))
+            foreach (var preset in presets)
             {
                 var selected = string.Equals(preset.Name, this.selectedPresetName, StringComparison.OrdinalIgnoreCase);
                 if (ImGui.Selectable($"{preset.Name} ({preset.Entries.Count})", selected))
@@ -311,7 +375,7 @@ public sealed class SetupPopup : IDisposable
                     this.selectedPresetName = string.Empty;
                     this.presetNameBuffer = string.Empty;
                     this.renamePresetBuffer = string.Empty;
-                    this.EnsureSelectedPreset();
+                    this.EnsureSelectedPreset(this.plugin.PlaylistPresets.LoadForMod(this.plugin.Configuration.SelectedModDirectory));
                 }
 
                 this.pendingPresetName = string.Empty;
@@ -329,14 +393,12 @@ public sealed class SetupPopup : IDisposable
         }
     }
 
-    private void EnsureSelectedPreset()
+    private void EnsureSelectedPreset(IReadOnlyList<PlaylistPreset> presets)
     {
-        if (!string.IsNullOrWhiteSpace(this.selectedPresetName) && this.SelectedPreset() is not null)
+        if (!string.IsNullOrWhiteSpace(this.selectedPresetName) && this.SelectedPreset(presets) is not null)
             return;
 
-        var first = this.plugin.Configuration.SavedPlaylists
-            .OrderBy(preset => preset.Name, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
+        var first = presets.FirstOrDefault();
         if (first is null)
         {
             this.selectedPresetName = string.Empty;
@@ -350,8 +412,8 @@ public sealed class SetupPopup : IDisposable
             this.renamePresetBuffer = first.Name;
     }
 
-    private PlaylistPreset? SelectedPreset()
-        => this.plugin.Configuration.SavedPlaylists.FirstOrDefault(preset =>
+    private PlaylistPreset? SelectedPreset(IReadOnlyList<PlaylistPreset> presets)
+        => presets.FirstOrDefault(preset =>
             string.Equals(preset.Name, this.selectedPresetName, StringComparison.OrdinalIgnoreCase));
 
     private void DrawModCombo(float columnWidth)
@@ -387,6 +449,7 @@ public sealed class SetupPopup : IDisposable
             {
                 this.modFilter = string.Empty;
                 this.controller.SelectMod(mod.Directory);
+                this.ResetVisualSetEditor();
             }
 
             if (selected)
@@ -396,23 +459,577 @@ public sealed class SetupPopup : IDisposable
         ImGui.EndCombo();
     }
 
+    private void DrawAnimationModCombo(float columnWidth)
+    {
+        var selectedMod = this.controller.Mods.FirstOrDefault(mod => mod.Directory == this.plugin.Configuration.AnimationModDirectory);
+        var selectedLabel = string.IsNullOrWhiteSpace(selectedMod.Directory) ? "Choose animation mod" : selectedMod.Label;
+        this.BeginSetupColumn();
+        ImGui.SetNextItemWidth(columnWidth);
+
+        // Pin the dropdown width like the music combo so long labels clip instead of reflowing.
+        ImGui.SetNextWindowSizeConstraints(new Vector2(columnWidth, 0f), new Vector2(columnWidth, float.MaxValue));
+        if (!ImGui.BeginCombo("##animmod", selectedLabel))
+            return;
+
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.IsWindowAppearing())
+        {
+            this.controller.RefreshMods();
+            ImGui.SetKeyboardFocusHere();
+        }
+
+        ImGui.InputTextWithHint("##animmodfilter", "filter mods", ref this.animationModFilter, 128);
+        ImGui.Separator();
+
+        foreach (var mod in this.FilteredMods(this.animationModFilter))
+        {
+            var selected = mod.Directory == this.plugin.Configuration.AnimationModDirectory;
+            if (ImGui.Selectable(mod.Label, selected))
+            {
+                this.animationModFilter = string.Empty;
+                this.controller.SelectAnimationMod(mod.Directory);
+                this.ResetVisualSetEditor();
+            }
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawVfxSettings(float columnWidth)
+    {
+        var modDir = this.controller.EmoteSourceModDirectory;
+        if (string.IsNullOrWhiteSpace(modDir))
+            return;
+
+        this.Section("vfx", columnWidth);
+        this.DrawDefaultVisualSetCombo(columnWidth, modDir);
+
+        this.BeginSetupColumn();
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##open_vfx_sets", "VFX SETS", new Vector2(86, ButtonHeight)))
+            this.plugin.VfxSetsWindow.IsOpen = true;
+    }
+
+    private void DrawVisualSetLibrary(float columnWidth)
+    {
+        var modDir = this.controller.EmoteSourceModDirectory;
+        if (string.IsNullOrWhiteSpace(modDir))
+        {
+            this.DrawVfxSection("vfx set library", columnWidth);
+            this.BeginVfxColumn(columnWidth);
+            ImGui.TextDisabled("Choose an animation mod first.");
+            return;
+        }
+
+        this.EnsureVisualGroups(modDir);
+        this.DrawVfxSection("vfx set library", columnWidth);
+        this.DrawVisualSetSelector(columnWidth, modDir);
+
+        var set = this.SelectedVisualSet(modDir);
+        if (set is null)
+        {
+            this.BeginVfxColumn(columnWidth);
+            ImGui.TextDisabled(this.creatingVisualSet
+                ? "Enter a set name, then SAVE SET."
+                : "No VFX set selected.");
+            return;
+        }
+
+        set.ModDirectory = modDir;
+        if (!string.IsNullOrWhiteSpace(this.visualGroupsError))
+        {
+            this.BeginVfxColumn(columnWidth);
+            ImGui.TextDisabled(this.visualGroupsError);
+            return;
+        }
+
+        if (this.visualGroups.Count == 0)
+        {
+            this.BeginVfxColumn(columnWidth);
+            ImGui.TextDisabled("No option groups found for this mod.");
+            return;
+        }
+
+        this.BeginVfxColumn(columnWidth);
+        ImGui.TextDisabled("mod options");
+        foreach (var (group, options) in this.visualGroups.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            this.BeginVfxColumn(columnWidth);
+            ImGui.PushID(group);
+            ImGui.TextDisabled(group);
+            this.BeginVfxColumn(columnWidth);
+            ImGui.SetNextItemWidth(columnWidth);
+
+            set.OptionSelections.TryGetValue(group, out var selectedOption);
+            var hasSelected = !string.IsNullOrWhiteSpace(selectedOption);
+            var selectionExists = hasSelected && options.Contains(selectedOption, StringComparer.OrdinalIgnoreCase);
+            var label = !hasSelected
+                ? "(unchanged)"
+                : selectionExists
+                    ? selectedOption
+                    : $"{selectedOption} (missing)";
+
+            if (ImGui.BeginCombo("##vfx_option", label))
+            {
+                if (ImGui.Selectable("(unchanged)", !hasSelected))
+                {
+                    set.OptionSelections.Remove(group);
+                    this.SaveVisualSetFile(set);
+                }
+
+                foreach (var option in options)
+                {
+                    var selected = string.Equals(option, selectedOption, StringComparison.OrdinalIgnoreCase);
+                    if (ImGui.Selectable(option, selected))
+                    {
+                        set.OptionSelections[group] = option;
+                        this.SaveVisualSetFile(set);
+                    }
+
+                    if (selected)
+                        ImGui.SetItemDefaultFocus();
+                }
+
+                ImGui.EndCombo();
+            }
+
+            ImGui.PopID();
+        }
+
+        this.DrawVisualSetEmoteCombo(columnWidth, set);
+
+        this.BeginVfxColumn(columnWidth);
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##clear_vfx_options", "CLEAR SET", new Vector2(86, ButtonHeight)))
+        {
+            set.OptionSelections.Clear();
+            if (this.SaveVisualSetFile(set))
+                this.controller.SetStatus($"Cleared visual set '{set.Name}'.");
+        }
+    }
+
+    private void DrawVfxSection(string label, float columnWidth)
+    {
+        ImGui.Dummy(new Vector2(1, 7));
+        this.BeginVfxColumn(columnWidth);
+
+        var start = ImGui.GetCursorScreenPos();
+        var drawList = ImGui.GetWindowDrawList();
+        var dividerColor = ImGui.GetColorU32(this.plugin.CurrentSkin.GenColors.Divider);
+        var text = label.ToUpperInvariant();
+        if (this.plugin.CurrentSkin.HasGenTexture && GenTextRenderer.CanRender(text))
+        {
+            GenTextRenderer.DrawText(this.plugin.CurrentSkin, text, start + new Vector2(1, 1), 1f, active: true);
+            drawList.AddLine(new Vector2(start.X, start.Y + 11), new Vector2(start.X + columnWidth, start.Y + 11), dividerColor);
+            ImGui.Dummy(new Vector2(columnWidth, 13));
+        }
+        else
+        {
+            var size = ImGui.CalcTextSize(text);
+            drawList.AddText(start, ImGui.GetColorU32(this.plugin.CurrentSkin.GenColors.WindowText), text);
+            drawList.AddLine(new Vector2(start.X, start.Y + size.Y + 2), new Vector2(start.X + columnWidth, start.Y + size.Y + 2), dividerColor);
+            ImGui.Dummy(new Vector2(columnWidth, size.Y + 2));
+        }
+
+        this.BeginVfxColumn(columnWidth);
+    }
+
+    private void DrawDefaultVisualSetCombo(float columnWidth, string modDir)
+    {
+        var current = this.controller.VisualSetsForMod(modDir).FirstOrDefault(set =>
+            string.Equals(set.Name, this.plugin.Configuration.DefaultVisualSetName, StringComparison.OrdinalIgnoreCase));
+        if (current is null && !string.IsNullOrWhiteSpace(this.plugin.Configuration.DefaultVisualSetName))
+        {
+            this.plugin.Configuration.DefaultVisualSetName = string.Empty;
+            this.plugin.Save();
+        }
+
+        var currentLabel = current is null ? "(no default)" : current.Name;
+        this.BeginSetupColumn();
+        ImGui.TextDisabled("playlist vfx");
+        SkinnedPanel.SameRow(RowGap);
+        ImGui.SetNextItemWidth(MathF.Max(145, columnWidth - 92));
+
+        if (!ImGui.BeginCombo("##default_visual_set", currentLabel))
+            return;
+
+        if (ImGui.Selectable("(no default)", current is null))
+        {
+            this.plugin.Configuration.DefaultVisualSetName = string.Empty;
+            this.plugin.Save();
+        }
+
+        foreach (var set in this.controller.VisualSetsForMod(modDir))
+        {
+            var selected = current is not null && string.Equals(current.Name, set.Name, StringComparison.OrdinalIgnoreCase);
+            if (ImGui.Selectable(set.Name, selected))
+            {
+                this.plugin.Configuration.DefaultVisualSetName = set.Name;
+                this.plugin.Save();
+            }
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawVisualSetSelector(float columnWidth, string modDir)
+    {
+        this.EnsureSelectedVisualSet(modDir);
+        var selectedSet = this.SelectedVisualSet(modDir);
+        var comboLabel = selectedSet is null ? "(new set)" : selectedSet.Name;
+
+        this.BeginVfxColumn(columnWidth);
+        ImGui.TextDisabled("edit set");
+        this.BeginVfxColumn(columnWidth);
+        ImGui.SetNextItemWidth(MathF.Max(160, columnWidth - 44 - 68 - RowGap * 2));
+        if (ImGui.BeginCombo("##visual_set", comboLabel))
+        {
+            if (ImGui.Selectable("(new set)", selectedSet is null))
+                this.StartNewVisualSet();
+
+            foreach (var set in this.controller.VisualSetsForMod(modDir))
+            {
+                var selected = string.Equals(set.Name, this.selectedVisualSetName, StringComparison.OrdinalIgnoreCase);
+                if (ImGui.Selectable(set.Name, selected))
+                {
+                    this.creatingVisualSet = false;
+                    this.selectedVisualSetName = set.Name;
+                    this.visualSetNameBuffer = set.Name;
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        SkinnedPanel.SameRow(RowGap);
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##new_visual_set", "NEW", new Vector2(44, ButtonHeight)))
+            this.StartNewVisualSet();
+
+        SkinnedPanel.SameRow(RowGap);
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##delete_visual_set", "DELETE", new Vector2(68, ButtonHeight)))
+            this.DeleteSelectedVisualSet(modDir);
+
+        this.BeginVfxColumn(columnWidth);
+        ImGui.TextDisabled("set name");
+        this.BeginVfxColumn(columnWidth);
+        ImGui.SetNextItemWidth(MathF.Max(160, columnWidth - 76 - RowGap));
+        if (this.focusVisualSetName)
+        {
+            ImGui.SetKeyboardFocusHere();
+            this.focusVisualSetName = false;
+        }
+
+        ImGui.InputTextWithHint("##visual_set_name", "name", ref this.visualSetNameBuffer, 64);
+        SkinnedPanel.SameRow(RowGap);
+        if (SkinnedPanel.Button(this.plugin.CurrentSkin, "##save_visual_set", "SAVE SET", new Vector2(76, ButtonHeight)))
+            this.SaveVisualSet(modDir);
+    }
+
+    private void StartNewVisualSet()
+    {
+        this.creatingVisualSet = true;
+        this.focusVisualSetName = true;
+        this.selectedVisualSetName = string.Empty;
+        this.visualSetNameBuffer = string.Empty;
+    }
+
+    private void DrawVisualSetEmoteCombo(float columnWidth, VisualSet set)
+    {
+        var modDir = VisualSetModDirectory(set, this.controller.EmoteSourceModDirectory);
+        this.EnsureChangedItems(modDir);
+        if (!string.IsNullOrWhiteSpace(this.changedItemsError))
+            return;
+
+        var emoteItems = this.changedItems.Where(item => item.IsEmote).ToList();
+        if (emoteItems.Count == 0)
+            return;
+
+        var current = set.Emotes.Count > 0 ? set.Emotes[0] : null;
+        var comboLabel = current is null ? "(no emote)" : current.Name;
+        this.BeginVfxColumn(columnWidth);
+        ImGui.TextDisabled("set emote");
+        this.BeginVfxColumn(columnWidth);
+        ImGui.SetNextItemWidth(columnWidth);
+        if (ImGui.BeginCombo("##visual_set_emote", comboLabel))
+        {
+            if (ImGui.Selectable("(no emote)", current is null))
+            {
+                set.Emotes.Clear();
+                this.SaveVisualSetFile(set);
+            }
+
+            foreach (var item in emoteItems)
+            {
+                var selected = current is not null && current.EmoteId == item.RowId;
+                if (ImGui.Selectable(item.DisplayName, selected))
+                {
+                    set.Emotes =
+                    [
+                        new ModEmoteTrigger { EmoteId = item.RowId, Name = item.DisplayName },
+                    ];
+                    this.SaveVisualSetFile(set);
+                }
+
+                if (selected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+    }
+
+    private void EnsureVisualGroups(string modDir)
+    {
+        if (string.Equals(this.visualGroupsModDir, modDir, StringComparison.Ordinal))
+            return;
+
+        this.visualGroupsModDir = modDir;
+        var result = this.plugin.Penumbra.GetAvailableSettings(modDir);
+        this.visualGroups = result.Success && result.Value is not null
+            ? result.Value
+            : new Dictionary<string, string[]>();
+        this.visualGroupsError = result.Success ? string.Empty : result.Error;
+    }
+
+    private void ResetVisualSetEditor()
+    {
+        this.creatingVisualSet = false;
+        this.focusVisualSetName = false;
+        this.selectedVisualSetName = string.Empty;
+        this.visualSetNameBuffer = string.Empty;
+        this.visualGroupsModDir = string.Empty;
+        this.visualGroups = new Dictionary<string, string[]>();
+        this.visualGroupsError = string.Empty;
+    }
+
+    private void EnsureSelectedVisualSet(string modDir)
+    {
+        if (this.creatingVisualSet)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(this.selectedVisualSetName)
+            && this.SelectedVisualSet(modDir) is not null)
+            return;
+
+        var first = this.controller.VisualSetsForMod(modDir).FirstOrDefault();
+        this.selectedVisualSetName = first?.Name ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(this.visualSetNameBuffer))
+            this.visualSetNameBuffer = this.selectedVisualSetName;
+    }
+
+    private VisualSet? SelectedVisualSet(string modDir)
+        => this.creatingVisualSet
+            ? null
+            : this.controller.VisualSetsForMod(modDir).FirstOrDefault(set =>
+                string.Equals(set.Name, this.selectedVisualSetName, StringComparison.OrdinalIgnoreCase));
+
+    private void SaveVisualSet(string modDir)
+    {
+        var name = this.visualSetNameBuffer.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            this.controller.SetStatus("Enter a visual set name first.");
+            return;
+        }
+
+        var selected = this.SelectedVisualSet(modDir);
+        var oldName = selected?.Name ?? string.Empty;
+        var isRename = !string.IsNullOrWhiteSpace(oldName)
+            && !string.Equals(oldName, name, StringComparison.OrdinalIgnoreCase);
+        if (this.creatingVisualSet && this.plugin.VisualSets.Exists(name, modDir))
+        {
+            this.controller.SetStatus($"A visual set named '{name}' already exists.");
+            return;
+        }
+
+        if (!this.creatingVisualSet && isRename && this.plugin.VisualSets.Exists(name, modDir))
+        {
+            this.controller.SetStatus($"A visual set named '{name}' already exists.");
+            return;
+        }
+
+        var set = selected ?? new VisualSet();
+        set.Name = name;
+        set.ModDirectory = modDir;
+        set.OptionSelections ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        set.Emotes ??= [];
+        if (!this.SaveVisualSetFile(set, oldName))
+            return;
+
+        var savedPlaylists = Result<int>.Ok(0);
+        if (isRename)
+            savedPlaylists = this.RenameVisualSetReferences(oldName, name, modDir);
+
+        this.selectedVisualSetName = name;
+        this.visualSetNameBuffer = name;
+        this.creatingVisualSet = false;
+        this.focusVisualSetName = false;
+        this.plugin.Save();
+        this.controller.SetStatus(savedPlaylists.Success
+            ? $"Saved visual set '{name}'."
+            : $"Saved visual set '{name}', but saved playlists may need cleanup.");
+    }
+
+    private void DeleteSelectedVisualSet(string modDir)
+    {
+        var set = this.SelectedVisualSet(modDir);
+        if (set is null)
+        {
+            this.controller.SetStatus("Choose a visual set first.");
+            return;
+        }
+
+        try
+        {
+            if (!this.plugin.VisualSets.Delete(set.Name, modDir))
+            {
+                this.controller.SetStatus("Visual set no longer exists.");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error(ex, "Could not delete visual set {Name}.", set.Name);
+            this.controller.SetStatus($"Could not delete visual set '{set.Name}': {ex.Message}");
+            return;
+        }
+
+        if (this.ActivePlaylistUsesVisualMod(modDir)
+            && string.Equals(this.plugin.Configuration.DefaultVisualSetName, set.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            this.plugin.Configuration.DefaultVisualSetName = string.Empty;
+        }
+
+        if (this.ActivePlaylistUsesVisualMod(modDir))
+        {
+            foreach (var entry in this.plugin.Configuration.Playlist)
+            {
+                if (string.Equals(entry.VisualSetName, set.Name, StringComparison.OrdinalIgnoreCase))
+                    entry.VisualSetName = string.Empty;
+            }
+        }
+
+        var savedPlaylists = this.plugin.PlaylistPresets.RewriteAll(preset =>
+        {
+            if (!PlaylistUsesVisualMod(preset, modDir))
+                return false;
+
+            var changed = false;
+            if (string.Equals(preset.DefaultVisualSetName, set.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                preset.DefaultVisualSetName = string.Empty;
+                changed = true;
+            }
+
+            foreach (var entry in preset.Entries)
+            {
+                if (!string.Equals(entry.VisualSetName, set.Name, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                entry.VisualSetName = string.Empty;
+                changed = true;
+            }
+
+            return changed;
+        });
+
+        this.selectedVisualSetName = string.Empty;
+        this.visualSetNameBuffer = string.Empty;
+        this.creatingVisualSet = false;
+        this.focusVisualSetName = false;
+        this.EnsureSelectedVisualSet(modDir);
+        this.plugin.Save();
+        this.controller.SetStatus(savedPlaylists.Success
+            ? $"Deleted visual set '{set.Name}'."
+            : $"Deleted visual set '{set.Name}', but saved playlists may need cleanup.");
+    }
+
+    private Result<int> RenameVisualSetReferences(string oldName, string newName, string modDir)
+    {
+        if (this.ActivePlaylistUsesVisualMod(modDir)
+            && string.Equals(this.plugin.Configuration.DefaultVisualSetName, oldName, StringComparison.OrdinalIgnoreCase))
+        {
+            this.plugin.Configuration.DefaultVisualSetName = newName;
+        }
+
+        if (this.ActivePlaylistUsesVisualMod(modDir))
+        {
+            foreach (var entry in this.plugin.Configuration.Playlist)
+            {
+                if (string.Equals(entry.VisualSetName, oldName, StringComparison.OrdinalIgnoreCase))
+                    entry.VisualSetName = newName;
+            }
+        }
+
+        return this.plugin.PlaylistPresets.RewriteAll(preset =>
+        {
+            if (!PlaylistUsesVisualMod(preset, modDir))
+                return false;
+
+            var changed = false;
+            if (string.Equals(preset.DefaultVisualSetName, oldName, StringComparison.OrdinalIgnoreCase))
+            {
+                preset.DefaultVisualSetName = newName;
+                changed = true;
+            }
+
+            foreach (var entry in preset.Entries)
+            {
+                if (!string.Equals(entry.VisualSetName, oldName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                entry.VisualSetName = newName;
+                changed = true;
+            }
+
+            return changed;
+        });
+    }
+
+    private bool ActivePlaylistUsesVisualMod(string modDir)
+        => StorageScope.SameMod(this.controller.EmoteSourceModDirectory, modDir);
+
+    private static bool PlaylistUsesVisualMod(PlaylistPreset preset, string modDir)
+    {
+        var source = preset.DualSourceMode && !string.IsNullOrWhiteSpace(preset.AnimationModDirectory)
+            ? preset.AnimationModDirectory
+            : preset.SelectedModDirectory;
+        return StorageScope.SameMod(source, modDir);
+    }
+
+    private bool SaveVisualSetFile(VisualSet set, string? originalName = null)
+    {
+        try
+        {
+            this.plugin.VisualSets.Save(set, originalName);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error(ex, "Could not save visual set {Name}.", set.Name);
+            this.controller.SetStatus($"Could not save visual set '{set.Name}': {ex.Message}");
+            return false;
+        }
+    }
+
     private void DrawChangedItems(float columnWidth)
     {
-        // Refresh the cached list only when the selected mod changes (the IPC call is not
-        // free, so we don't run it every frame).
-        var modDir = this.plugin.Configuration.SelectedModDirectory;
-        if (!string.Equals(modDir, this.changedItemsModDir, StringComparison.Ordinal))
-        {
-            this.changedItemsModDir = modDir;
-            var result = this.plugin.Penumbra.GetChangedItemsList(modDir);
-            this.changedItems = result.Success && result.Value is not null ? result.Value : Array.Empty<ChangedItem>();
-            this.changedItemsError = result.Success ? string.Empty : result.Error;
-        }
+        // Refresh the cached list only when the emote-source mod changes (the IPC call is not
+        // free, so we don't run it every frame). In dual mod setup this is the animation mod.
+        var modDir = this.controller.EmoteSourceModDirectory;
+        this.EnsureChangedItems(modDir);
 
         if (string.IsNullOrWhiteSpace(modDir))
             return;
 
-        this.Section("Select emote to play", columnWidth);
+        this.Section("fallback emote", columnWidth);
         this.BeginSetupColumn();
 
         if (!string.IsNullOrWhiteSpace(this.changedItemsError))
@@ -427,7 +1044,7 @@ public sealed class SetupPopup : IDisposable
             return;
         }
 
-        var modDirKey = this.plugin.Configuration.SelectedModDirectory;
+        var modDirKey = modDir;
         var emoteItems = this.changedItems.Where(item => item.IsEmote).ToList();
 
         this.BeginSetupColumn();
@@ -490,6 +1107,20 @@ public sealed class SetupPopup : IDisposable
             this.controller.SetStatus("Play emote: none.");
         }
     }
+
+    private void EnsureChangedItems(string modDir)
+    {
+        if (string.Equals(modDir, this.changedItemsModDir, StringComparison.Ordinal))
+            return;
+
+        this.changedItemsModDir = modDir;
+        var result = this.plugin.Penumbra.GetChangedItemsList(modDir);
+        this.changedItems = result.Success && result.Value is not null ? result.Value : Array.Empty<ChangedItem>();
+        this.changedItemsError = result.Success ? string.Empty : result.Error;
+    }
+
+    private static string VisualSetModDirectory(VisualSet set, string fallback)
+        => !string.IsNullOrWhiteSpace(set.ModDirectory) ? set.ModDirectory : fallback;
 
     private void DrawContacts(float columnWidth)
     {
@@ -594,13 +1225,16 @@ public sealed class SetupPopup : IDisposable
     }
 
     private IEnumerable<PenumbraMod> FilteredMods()
+        => this.FilteredMods(this.modFilter);
+
+    private IEnumerable<PenumbraMod> FilteredMods(string filter)
     {
-        if (string.IsNullOrWhiteSpace(this.modFilter))
+        if (string.IsNullOrWhiteSpace(filter))
             return this.controller.Mods;
 
         return this.controller.Mods.Where(mod =>
-            mod.Directory.Contains(this.modFilter, StringComparison.OrdinalIgnoreCase)
-            || mod.Name.Contains(this.modFilter, StringComparison.OrdinalIgnoreCase));
+            mod.Directory.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || mod.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
     }
 
     private void OnSkinSelected(bool success, string path)

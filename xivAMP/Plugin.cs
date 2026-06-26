@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FileDialogManager fileDialogManager = new();
     private readonly XivAmpController controller;
     private readonly PlayerWindow playerWindow;
+    private readonly SetupPopup settingsPanel;
     private readonly WinampSkinLoader skinLoader;
     private bool configDirty;
     private DateTime lastConfigSave;
@@ -28,20 +29,33 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         this.Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        var configDirectory = PluginInterface.GetPluginConfigDirectory();
+        this.PlaylistPresets = new PlaylistPresetStorage(configDirectory, Log);
+        this.VisualSets = new VisualSetStorage(configDirectory, Log);
+        this.MigrateSavedPlaylistsToFiles();
+        this.MigrateFlatPlaylistFilesToScopes();
+        this.MigrateVisualSetsToFiles();
+        this.MigrateFlatVisualSetFilesToScopes();
         this.Penumbra = new PenumbraService(PluginInterface, Log);
         this.Emotes = new EmoteService(Log);
         this.controller = new XivAmpController(this, Log, ObjectTable);
+        this.controller.DiscardPersistedPlaybackState();
         this.skinLoader = new WinampSkinLoader(TextureProvider);
         this.CurrentSkin = this.skinLoader.CreateFallback();
         this.LoadConfiguredSkin();
 
-        this.playerWindow = new PlayerWindow(this, this.controller, this.fileDialogManager);
+        this.settingsPanel = new SetupPopup(this, this.controller, this.fileDialogManager);
+        this.playerWindow = new PlayerWindow(this, this.controller);
         this.PlayerWindow = this.playerWindow;
         this.PlaylistWindow = new PlaylistWindow(this, this.controller);
         this.AddTracksWindow = new AddTracksWindow(this);
+        this.SettingsWindow = new SettingsWindow(this, this.settingsPanel);
+        this.VfxSetsWindow = new VfxSetsWindow(this, this.settingsPanel);
         this.WindowSystem.AddWindow(this.playerWindow);
         this.WindowSystem.AddWindow(this.PlaylistWindow);
         this.WindowSystem.AddWindow(this.AddTracksWindow);
+        this.WindowSystem.AddWindow(this.SettingsWindow);
+        this.WindowSystem.AddWindow(this.VfxSetsWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(this.OnCommand)
         {
@@ -88,6 +102,10 @@ public sealed class Plugin : IDalamudPlugin
 
     internal Configuration Configuration { get; }
 
+    internal PlaylistPresetStorage PlaylistPresets { get; }
+
+    internal VisualSetStorage VisualSets { get; }
+
     internal PenumbraService Penumbra { get; }
 
     internal EmoteService Emotes { get; }
@@ -100,9 +118,21 @@ public sealed class Plugin : IDalamudPlugin
 
     internal AddTracksWindow AddTracksWindow { get; }
 
-    internal bool SetupPopupRequested { get; set; }
+    internal SettingsWindow SettingsWindow { get; }
+
+    internal VfxSetsWindow VfxSetsWindow { get; }
 
     internal WindowSystem WindowSystem { get; } = new("xivAMP");
+
+    internal void CloseMainUi()
+    {
+        this.controller.ReleaseControl();
+        this.playerWindow.IsOpen = false;
+        this.PlaylistWindow.IsOpen = false;
+        this.AddTracksWindow.IsOpen = false;
+        this.SettingsWindow.IsOpen = false;
+        this.VfxSetsWindow.IsOpen = false;
+    }
 
     public void Dispose()
     {
@@ -121,7 +151,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= this.OpenConfigUi;
         PluginInterface.UiBuilder.Draw -= this.DrawUi;
         this.WindowSystem.RemoveAllWindows();
-        this.playerWindow.Dispose();
+        this.settingsPanel.Dispose();
         this.CurrentSkin.Dispose();
         this.fileDialogManager.Reset();
         this.Penumbra.Dispose();
@@ -225,6 +255,8 @@ public sealed class Plugin : IDalamudPlugin
         this.playerWindow.IsOpen = true;
         if (this.Configuration.PlaylistWindowVisible)
             this.PlaylistWindow.IsOpen = true;
+
+        this.SettingsWindow.IsOpen = true;
     }
 
     private void DrawUi()
@@ -238,13 +270,102 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (this.playerWindow.IsOpen)
         {
-            this.playerWindow.IsOpen = false;
-            this.PlaylistWindow.IsOpen = false;
+            this.CloseMainUi();
             return;
         }
 
         this.playerWindow.IsOpen = true;
         if (this.Configuration.PlaylistWindowVisible)
             this.PlaylistWindow.IsOpen = true;
+    }
+
+    internal void ToggleSettingsWindow()
+    {
+        if (!this.playerWindow.IsOpen)
+            this.playerWindow.IsOpen = true;
+
+        this.SettingsWindow.IsOpen = !this.SettingsWindow.IsOpen;
+    }
+
+    internal void OpenSettingsWindow()
+    {
+        if (!this.playerWindow.IsOpen)
+            this.playerWindow.IsOpen = true;
+
+        this.SettingsWindow.IsOpen = true;
+    }
+
+    private void MigrateSavedPlaylistsToFiles()
+    {
+        if (this.Configuration.SavedPlaylists.Count == 0)
+            return;
+
+        var result = this.PlaylistPresets.MigrateFromConfig(this.Configuration.SavedPlaylists);
+        if (!result.Success)
+        {
+            Log.Warning("Could not migrate saved playlist presets: {Error}", result.Error);
+            return;
+        }
+
+        this.Configuration.SavedPlaylists.Clear();
+        PluginInterface.SavePluginConfig(this.Configuration);
+        Log.Information(
+            "Migrated {Count} saved playlist preset(s) to {Directory}.",
+            result.Value,
+            this.PlaylistPresets.PlaylistsDirectory);
+    }
+
+    private void MigrateFlatPlaylistFilesToScopes()
+    {
+        var result = this.PlaylistPresets.MigrateFlatFilesToScopes();
+        if (!result.Success)
+        {
+            Log.Warning("Could not migrate all flat playlist preset files: {Error}", result.Error);
+            return;
+        }
+
+        if (result.Value > 0)
+        {
+            Log.Information(
+                "Migrated {Count} flat playlist preset file(s) into mod-scoped folders.",
+                result.Value);
+        }
+    }
+
+    private void MigrateVisualSetsToFiles()
+    {
+        if (this.Configuration.VisualSets.Count == 0)
+            return;
+
+        var result = this.VisualSets.MigrateFromConfig(this.Configuration.VisualSets);
+        if (!result.Success)
+        {
+            Log.Warning("Could not migrate visual sets: {Error}", result.Error);
+            return;
+        }
+
+        this.Configuration.VisualSets.Clear();
+        PluginInterface.SavePluginConfig(this.Configuration);
+        Log.Information(
+            "Migrated {Count} visual set(s) to {Directory}.",
+            result.Value,
+            this.VisualSets.VisualSetsDirectory);
+    }
+
+    private void MigrateFlatVisualSetFilesToScopes()
+    {
+        var result = this.VisualSets.MigrateFlatFilesToScopes();
+        if (!result.Success)
+        {
+            Log.Warning("Could not migrate all flat visual set files: {Error}", result.Error);
+            return;
+        }
+
+        if (result.Value > 0)
+        {
+            Log.Information(
+                "Migrated {Count} flat visual set file(s) into mod-scoped folders.",
+                result.Value);
+        }
     }
 }

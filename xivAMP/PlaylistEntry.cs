@@ -19,5 +19,8 @@ public sealed class PlaylistEntry
 
     public string ScdPath { get; set; } = string.Empty;
 
+    /// <summary>Empty = inherit playlist default, <see cref="VisualSet.DisabledName"/> = VFX OFF.</summary>
+    public string VisualSetName { get; set; } = string.Empty;
+
     public string Label => string.IsNullOrWhiteSpace(this.DisplayName) ? this.OptionName : this.DisplayName;
 }

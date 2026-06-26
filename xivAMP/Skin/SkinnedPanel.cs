@@ -249,19 +249,18 @@ public static class SkinnedPanel
         var pos = ImGui.GetWindowPos();
         var width = ImGui.GetWindowSize().X;
 
-        // Use the GEN.bmp titlebar font when the title is all letters; otherwise (e.g.
-        // confirmation questions with "?" or names) fall back to plain text.
-        if (skin.HasGenTexture && GenTextRenderer.CanRender(title))
+        var text = title.ToUpperInvariant();
+        if (skin.HasGenTexture && GenTextRenderer.CanRender(text))
         {
-            var measure = GenTextRenderer.Measure(title, 1f);
+            var measure = GenTextRenderer.Measure(text, 1f);
             var glyphX = pos.X + MathF.Max(28, (width - measure.X) * 0.5f);
-            GenTextRenderer.DrawText(skin, title, new Vector2(glyphX, pos.Y + 4), 1f, active: true);
+            GenTextRenderer.DrawText(skin, text, new Vector2(glyphX, pos.Y + 4), 1f, active: true);
             return;
         }
 
-        var text = title.ToUpperInvariant();
         var size = ImGui.CalcTextSize(text);
-        var textPos = pos + new Vector2(MathF.Max(28, (width - size.X) * 0.5f), -2);
+        var y = skin.HasGenTexture ? pos.Y + 4 : pos.Y - 2;
+        var textPos = new Vector2(pos.X + MathF.Max(28, (width - size.X) * 0.5f), y);
         ImGui.GetWindowDrawList().AddText(textPos, ImGui.GetColorU32(skin.GenColors.WindowText), text);
     }
 
@@ -270,31 +269,30 @@ public static class SkinnedPanel
 
     public static void Section(WinampSkin skin, string label, float width)
     {
+        var sectionWidth = MathF.Min(width, ContentWidth(skin));
         ImGui.Dummy(new Vector2(1, DefaultSectionGap));
-        if (width < ContentWidth(skin))
-            CenterNextItem(skin, width);
+        CenterNextItem(skin, sectionWidth);
 
         var start = ImGui.GetCursorScreenPos();
         var drawList = ImGui.GetWindowDrawList();
         var dividerColor = ImGui.GetColorU32(skin.GenColors.Divider);
 
-        // GEN.bmp active-letter header above a full-width underline; fall back to text.
-        if (GenTextRenderer.DrawText(skin, label, start + new Vector2(1, 1), 1f, active: true))
+        var text = label.ToUpperInvariant();
+        if (skin.HasGenTexture && GenTextRenderer.CanRender(text))
         {
-            drawList.AddLine(new Vector2(start.X, start.Y + 11), new Vector2(start.X + width, start.Y + 11), dividerColor);
-            ImGui.Dummy(new Vector2(width, 13));
+            GenTextRenderer.DrawText(skin, text, start + new Vector2(1, 1), 1f, active: true);
+            drawList.AddLine(new Vector2(start.X, start.Y + 11), new Vector2(start.X + sectionWidth, start.Y + 11), dividerColor);
+            ImGui.Dummy(new Vector2(sectionWidth, 13));
         }
         else
         {
-            var text = label.ToUpperInvariant();
             var size = ImGui.CalcTextSize(text);
             drawList.AddText(start, ImGui.GetColorU32(skin.GenColors.WindowText), text);
-            drawList.AddLine(new Vector2(start.X, start.Y + size.Y + 2), new Vector2(start.X + width, start.Y + size.Y + 2), dividerColor);
-            ImGui.Dummy(new Vector2(width, size.Y + 2));
+            drawList.AddLine(new Vector2(start.X, start.Y + size.Y + 2), new Vector2(start.X + sectionWidth, start.Y + size.Y + 2), dividerColor);
+            ImGui.Dummy(new Vector2(sectionWidth, size.Y + 2));
         }
 
-        if (width < ContentWidth(skin))
-            CenterNextItem(skin, width);
+        CenterNextItem(skin, sectionWidth);
     }
 
     public static void SameRow(float spacing = DefaultRowGap)
@@ -509,12 +507,18 @@ public static class SkinnedPanel
         var size = ImGui.GetWindowSize();
         var gripSize = new Vector2(GripSize, GripSize);
         var gripPos = pos + size - gripSize;
-        var mouse = ImGui.GetIO().MousePos;
-        var hovered = IsInRect(mouse, gripPos, gripPos + gripSize);
-        if (hovered)
+
+        var previousCursor = ImGui.GetCursorScreenPos();
+        ImGui.SetCursorScreenPos(gripPos);
+        ImGui.InvisibleButton($"##resize_{id}", gripSize);
+        var hovered = ImGui.IsItemHovered();
+        var active = ImGui.IsItemActive();
+        ImGui.SetCursorScreenPos(previousCursor);
+
+        if (hovered || active)
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeAll);
 
-        if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        if (active)
             resizingPopupId = id;
 
         if (!ImGui.IsMouseDown(ImGuiMouseButton.Left) && string.Equals(resizingPopupId, id, StringComparison.Ordinal))
@@ -523,6 +527,7 @@ public static class SkinnedPanel
         if (!string.Equals(resizingPopupId, id, StringComparison.Ordinal))
             return;
 
+        var mouse = ImGui.GetIO().MousePos;
         var next = new Vector2(
             SnapToStep(MathF.Max(minSize.X, mouse.X - pos.X), ResizeStepX),
             SnapToStep(MathF.Max(minSize.Y, mouse.Y - pos.Y), ResizeStepY));

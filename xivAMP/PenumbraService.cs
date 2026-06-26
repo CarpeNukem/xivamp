@@ -207,6 +207,21 @@ public sealed class PenumbraService : IDisposable
     }
 
     public Result ApplyTrack(int objectIndex, string modDirectory, string optionGroup, string optionName, bool temporary, bool redraw)
+        => this.ApplyOptions(
+            objectIndex,
+            modDirectory,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [optionGroup] = optionName },
+            temporary,
+            redraw,
+            "playlist entry");
+
+    public Result ApplyOptions(
+        int objectIndex,
+        string modDirectory,
+        IReadOnlyDictionary<string, string> optionSelections,
+        bool temporary,
+        bool redraw,
+        string label)
     {
         if (!this.IsAvailable)
             return Result.Fail("Penumbra is not available.");
@@ -214,30 +229,53 @@ public sealed class PenumbraService : IDisposable
         if (string.IsNullOrWhiteSpace(modDirectory))
             return Result.Fail("Choose a Penumbra mod first.");
 
-        if (string.IsNullOrWhiteSpace(optionGroup))
-            return Result.Fail("Choose an option group first.");
+        if (optionSelections.Count == 0)
+            return Result.Ok();
 
-        if (string.IsNullOrWhiteSpace(optionName))
-            return Result.Fail("Playlist entry has no option name.");
+        foreach (var (optionGroup, optionName) in optionSelections)
+        {
+            if (string.IsNullOrWhiteSpace(optionGroup))
+                return Result.Fail("Choose an option group first.");
+
+            if (string.IsNullOrWhiteSpace(optionName))
+                return Result.Fail($"{label} has an empty option.");
+        }
 
         try
         {
             var code = temporary
-                ? this.ApplyTemporary(objectIndex, modDirectory, optionGroup, optionName)
-                : this.ApplyPersistent(objectIndex, modDirectory, optionGroup, optionName);
+                ? this.ApplyTemporary(objectIndex, modDirectory, optionSelections)
+                : this.ApplyPersistent(objectIndex, modDirectory, optionSelections);
 
             if (!IsSuccess(code))
                 return Result.Fail($"Penumbra rejected the option change: {code}");
 
-            if (redraw && this.redrawObject is not null)
-                this.redrawObject.Invoke(objectIndex, RedrawType.Redraw);
+            if (redraw)
+                return this.RedrawPlayer(objectIndex);
 
             return Result.Ok();
         }
         catch (Exception ex)
         {
-            this.log.Error(ex, "Could not apply track {OptionName} from {ModDirectory}.", optionName, modDirectory);
-            return Result.Fail($"Could not apply playlist entry: {ex.Message}");
+            this.log.Error(ex, "Could not apply {Label} from {ModDirectory}.", label, modDirectory);
+            return Result.Fail($"Could not apply {label}: {ex.Message}");
+        }
+    }
+
+    public Result RedrawPlayer(int objectIndex)
+    {
+        if (!this.IsAvailable || this.redrawObject is null)
+            return Result.Ok();
+
+        try
+        {
+            this.redrawObject.Invoke(objectIndex, RedrawType.Redraw);
+            return Result.Ok();
+        }
+        catch (Exception ex)
+        {
+            this.log.Error(ex, "Could not redraw player after applying settings.");
+            return Result.Fail($"Could not redraw player: {ex.Message}");
         }
     }
 
@@ -264,7 +302,7 @@ public sealed class PenumbraService : IDisposable
         }
     }
 
-    private PenumbraApiEc ApplyTemporary(int objectIndex, string modDirectory, string optionGroup, string optionName)
+    private PenumbraApiEc ApplyTemporary(int objectIndex, string modDirectory, IReadOnlyDictionary<string, string> optionSelections)
     {
         if (this.getCollectionForObject is null || this.getCurrentModSettingsWithTemp is null || this.setTemporaryModSettingsPlayer is null)
             return PenumbraApiEc.InvalidArgument;
@@ -287,7 +325,8 @@ public sealed class PenumbraService : IDisposable
             pair => pair.Key,
             pair => (IReadOnlyList<string>)pair.Value.ToList(),
             StringComparer.OrdinalIgnoreCase);
-        merged[optionGroup] = [optionName];
+        foreach (var (optionGroup, optionName) in optionSelections)
+            merged[optionGroup] = [optionName];
 
         // Play must work even when the mod is disabled in the player's persistent
         // collection. This temporary override is removed when xivAMP releases control,
@@ -304,7 +343,7 @@ public sealed class PenumbraService : IDisposable
             string.Empty);
     }
 
-    private PenumbraApiEc ApplyPersistent(int objectIndex, string modDirectory, string optionGroup, string optionName)
+    private PenumbraApiEc ApplyPersistent(int objectIndex, string modDirectory, IReadOnlyDictionary<string, string> optionSelections)
     {
         if (this.getCollectionForObject is null || this.trySetModSetting is null)
             return PenumbraApiEc.NothingChanged;
@@ -315,7 +354,14 @@ public sealed class PenumbraService : IDisposable
         if (!valid)
             return PenumbraApiEc.CollectionMissing;
 
-        return this.trySetModSetting.Invoke(collectionId, modDirectory, optionGroup, optionName, string.Empty);
+        foreach (var (optionGroup, optionName) in optionSelections)
+        {
+            var code = this.trySetModSetting.Invoke(collectionId, modDirectory, optionGroup, optionName, string.Empty);
+            if (!IsSuccess(code))
+                return code;
+        }
+
+        return PenumbraApiEc.Success;
     }
 
     private void OnPenumbraInitialized()

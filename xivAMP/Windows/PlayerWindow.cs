@@ -1,7 +1,6 @@
 using System.Numerics;
 using Dalamud.Game.Config;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using xivAMP.Services;
 using xivAMP.Skin;
@@ -17,7 +16,6 @@ public sealed class PlayerWindow : Window
 
     private readonly Plugin plugin;
     private readonly XivAmpController controller;
-    private readonly SetupPopup setupPopup;
     private readonly float[] visualizerPeaks = new float[VisualizerBars];
     private bool appliedInitialPosition;
     private bool draggingTitlebar;
@@ -26,12 +24,11 @@ public sealed class PlayerWindow : Window
     private DateTime lastPositionSave;
     private string autoAdvancedOptionName = string.Empty;
 
-    public PlayerWindow(Plugin plugin, XivAmpController controller, FileDialogManager fileDialogManager)
+    public PlayerWindow(Plugin plugin, XivAmpController controller)
         : base("xivAMP###xivAMPPlayer", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoBackground)
     {
         this.plugin = plugin;
         this.controller = controller;
-        this.setupPopup = new SetupPopup(plugin, controller, fileDialogManager);
         this.Size = SkinHelper.Scaled(plugin.Configuration, BaseSize);
         this.SizeCondition = ImGuiCond.Always;
     }
@@ -42,14 +39,11 @@ public sealed class PlayerWindow : Window
     /// playlist docks flush against the real bottom edge regardless of UI scale/rounding.</summary>
     internal float RenderedHeight { get; private set; }
 
-    internal void Dispose()
-        => this.setupPopup.Dispose();
-
     public override void OnClose()
     {
         // Closing the player UI fully releases control over the music mod:
         // restore the default option and clear xivAMP's temporary Penumbra settings.
-        this.controller.ReleaseControl();
+        this.plugin.CloseMainUi();
     }
 
     public override void PreDraw()
@@ -139,28 +133,6 @@ public sealed class PlayerWindow : Window
             this.controller.SetStatus($"Error: {ex.Message}");
         }
 
-        if (this.plugin.SetupPopupRequested)
-        {
-            this.plugin.SetupPopupRequested = false;
-            ImGui.OpenPopup("xivamp_setup");
-        }
-
-        if (SkinnedPanel.BeginPopup(
-                this.plugin.CurrentSkin,
-                "xivamp_setup",
-                new Vector2(this.plugin.Configuration.SetupPopupWidth, this.plugin.Configuration.SetupPopupHeight),
-                new Vector2(405, 450),
-                true,
-                size =>
-                {
-                    this.plugin.Configuration.SetupPopupWidth = size.X;
-                    this.plugin.Configuration.SetupPopupHeight = size.Y;
-                    this.plugin.Save();
-                }))
-        {
-            this.setupPopup.Draw();
-            SkinnedPanel.EndPopup(this.plugin.CurrentSkin);
-        }
     }
 
     private void DrawLogoLink(Vector2 origin, float scale)
@@ -195,7 +167,7 @@ public sealed class PlayerWindow : Window
 
         // Options / main menu button.
         if (SkinButton.Draw(this.plugin.CurrentSkin, "shade_options", "MAIN_OPTIONS_BUTTON", "MAIN_OPTIONS_BUTTON_DEPRESSED", origin + new Vector2(6, 3) * scale, new Vector2(9, 9) * scale))
-            ImGui.OpenPopup("xivamp_setup");
+            this.plugin.ToggleSettingsWindow();
 
         // Scrolling track title (left display box).
         var current = this.controller.AppliedEntry() ?? this.controller.CurrentEntry();
@@ -229,7 +201,7 @@ public sealed class PlayerWindow : Window
         if (this.ShadeHit(origin, scale, "s_next", 206, 9))
             this.controller.ApplyRelative(1);
         if (this.ShadeHit(origin, scale, "s_eject", 215, 10))
-            ImGui.OpenPopup("xivamp_setup");
+            this.plugin.ToggleSettingsWindow();
 
         // Mini position / seek bar.
         this.DrawShadePositionBar(origin, scale);
@@ -239,10 +211,7 @@ public sealed class PlayerWindow : Window
             this.ToggleShade();
 
         if (SkinButton.Draw(this.plugin.CurrentSkin, "shade_close", "MAIN_CLOSE_BUTTON", "MAIN_CLOSE_BUTTON_DEPRESSED", origin + new Vector2(264, 3) * scale, new Vector2(9, 9) * scale))
-        {
-            this.IsOpen = false;
-            this.plugin.PlaylistWindow.IsOpen = false;
-        }
+            this.plugin.CloseMainUi();
     }
 
     private void DrawShadeTime(Vector2 origin, float scale)
@@ -374,7 +343,7 @@ public sealed class PlayerWindow : Window
             this.controller.ApplyRelative(1);
 
         if (SkinButton.Draw(this.plugin.CurrentSkin, "setup_eject", "MAIN_EJECT_BUTTON", "MAIN_EJECT_BUTTON_ACTIVE", origin + new Vector2(136, 89) * scale, new Vector2(22, 16) * scale))
-            ImGui.OpenPopup("xivamp_setup");
+            this.plugin.ToggleSettingsWindow();
 
         if (SkinButton.Draw(this.plugin.CurrentSkin, "eq", "MAIN_EQ_BUTTON", "MAIN_EQ_BUTTON_DEPRESSED", origin + new Vector2(219, 58) * scale, new Vector2(23, 12) * scale))
             this.controller.SetStatus("EQ is visual-only for now.");
@@ -413,16 +382,13 @@ public sealed class PlayerWindow : Window
     private void DrawWindowButtons(Vector2 origin, float scale)
     {
         if (SkinButton.Draw(this.plugin.CurrentSkin, "options", "MAIN_OPTIONS_BUTTON", "MAIN_OPTIONS_BUTTON_DEPRESSED", origin + new Vector2(6, 3) * scale, new Vector2(9, 9) * scale))
-            ImGui.OpenPopup("xivamp_setup");
+            this.plugin.ToggleSettingsWindow();
 
         if (SkinButton.Draw(this.plugin.CurrentSkin, "shade", "MAIN_SHADE_BUTTON", "MAIN_SHADE_BUTTON_DEPRESSED", origin + new Vector2(254, 3) * scale, new Vector2(9, 9) * scale))
             this.ToggleShade();
 
         if (SkinButton.Draw(this.plugin.CurrentSkin, "close", "MAIN_CLOSE_BUTTON", "MAIN_CLOSE_BUTTON_DEPRESSED", origin + new Vector2(264, 3) * scale, new Vector2(9, 9) * scale))
-        {
-            this.IsOpen = false;
-            this.plugin.PlaylistWindow.IsOpen = false;
-        }
+            this.plugin.CloseMainUi();
     }
 
     private void ToggleShade()

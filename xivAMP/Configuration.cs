@@ -11,6 +11,22 @@ public sealed class Configuration : IPluginConfiguration
 
     public string SelectedOptionGroup { get; set; } = string.Empty;
 
+    /// <summary>
+    /// "Dual mod setup": when on, animations/emotes are sourced from a separate
+    /// <see cref="AnimationModDirectory"/> instead of the music mod, so music and
+    /// animations can come from different mods. Off = emote source is the music mod.
+    /// </summary>
+    public bool DualSourceMode { get; set; }
+
+    /// <summary>
+    /// The mod that provides animations/emotes when <see cref="DualSourceMode"/> is on.
+    /// Independent of the music mod; selecting it does not touch the playlist.
+    /// </summary>
+    public string AnimationModDirectory { get; set; } = string.Empty;
+
+    /// <summary>Playlist-level visual/VFX set. Tracks can inherit or override this.</summary>
+    public string DefaultVisualSetName { get; set; } = string.Empty;
+
     public bool UseTemporarySettings { get; set; } = true;
 
     public bool RedrawAfterApply { get; set; } = true;
@@ -53,13 +69,17 @@ public sealed class Configuration : IPluginConfiguration
 
     public float SetupPopupHeight { get; set; } = 305;
 
+    public float VfxSetsWindowWidth { get; set; } = 520;
+
+    public float VfxSetsWindowHeight { get; set; } = 440;
+
     public float AddPopupWidth { get; set; } = 560;
 
     public float AddPopupHeight { get; set; } = 360;
 
     public float TrackPropertiesPopupWidth { get; set; } = 455;
 
-    public float TrackPropertiesPopupHeight { get; set; } = 260;
+    public float TrackPropertiesPopupHeight { get; set; } = 170;
 
     public string LastAppliedOptionName { get; set; } = string.Empty;
 
@@ -88,6 +108,8 @@ public sealed class Configuration : IPluginConfiguration
 
     public List<PlaylistPreset> SavedPlaylists { get; set; } = [];
 
+    public List<VisualSet> VisualSets { get; set; } = [];
+
     /// <summary>
     /// Optional emote a mod fires when playback starts, keyed by mod directory. Empty / no
     /// entry means "do not start an emote". Picked from the mod's Penumbra "Changed Items"
@@ -102,4 +124,18 @@ public sealed class ModEmoteTrigger
     public uint EmoteId { get; set; }
 
     public string Name { get; set; } = string.Empty;
+}
+
+[Serializable]
+public sealed class VisualSet
+{
+    public const string DisabledName = "__xivamp_visual_off__";
+
+    public string Name { get; set; } = string.Empty;
+
+    public string ModDirectory { get; set; } = string.Empty;
+
+    public Dictionary<string, string> OptionSelections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public List<ModEmoteTrigger> Emotes { get; set; } = [];
 }
